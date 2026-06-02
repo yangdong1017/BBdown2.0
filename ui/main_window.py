@@ -18,15 +18,10 @@ class MainWindow(FluentWindow):
         self.setMinimumSize(1060, 760)
         self.download_page = DownloadPage(self)
         self.asr_page = ASRPage(self)
-        self.download_page.request_transcribe.connect(self._switch_to_asr)
         self.asr_page.request_download_dir.connect(self._use_download_dir)
         self.addSubInterface(self.download_page, FIF.DOWNLOAD, "批量下载")
         self.addSubInterface(self.asr_page, FIF.MICROPHONE, "批量转文字")
         self.navigationInterface.setExpandWidth(180)
-
-    def _switch_to_asr(self, files: list[str], save_dir: str) -> None:
-        self.asr_page.add_files(files)
-        self.switchTo(self.asr_page)
 
     def _use_download_dir(self) -> None:
         directory = Path(self.download_page.config.save_dir)

@@ -6,7 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from PyQt5.QtCore import QTimer, Qt, pyqtSignal
+from PyQt5.QtCore import QTimer, Qt
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import QFileDialog, QHBoxLayout, QVBoxLayout, QWidget
 
@@ -37,8 +37,6 @@ from .widgets import CardFrame, ConsoleLog, TEXT_EDIT_STYLE
 
 
 class DownloadPage(QWidget):
-    request_transcribe = pyqtSignal(list, str)
-
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("download")
@@ -48,6 +46,7 @@ class DownloadPage(QWidget):
         self.download_worker: DownloadWorkerThread | None = None
         self.login_worker: LoginWorkerThread | None = None
         self.failed_urls: list[str] = []
+        self.no_output_urls: list[str] = []
         self.qr_timer = QTimer(self)
         self.qr_timer.timeout.connect(self._refresh_qr_preview)
         self.qr_mtime: float | None = None
@@ -300,6 +299,7 @@ class DownloadPage(QWidget):
         self.url_edit.clear()
         self.console.clear()
         self.failed_urls = []
+        self.no_output_urls = []
         self._update_count()
 
     def _on_thread_changed(self, value: str) -> None:
@@ -337,6 +337,7 @@ class DownloadPage(QWidget):
             return
 
         self.failed_urls = []
+        self.no_output_urls = []
         self._new_session_log("download_batch")
         self._append_log("info", f"准备开始批量下载，线程设置 {self.config.thread_count}。")
 
@@ -365,24 +366,47 @@ class DownloadPage(QWidget):
             self._append_log("warn", f"批量任务已停止，已完成 {result.completed}/{result.total}。")
             self._set_status(f"批量任务已停止，已完成 {result.completed}/{result.total}")
             return
-        if result.failed_urls:
-            self.failed_urls = result.failed_urls
-            self._append_log("warn", f"批量任务结束，成功 {result.completed} 个，失败 {len(result.failed_urls)} 个。")
-            for item in result.failed_urls:
-                self._append_log("fail", f"失败链接: {item}")
-            self._set_status(f"批量任务结束，成功 {result.completed}/{result.total}，失败 {len(result.failed_urls)}")
-        else:
-            self._append_log("ok", f"批量任务完成，共完成 {result.completed} 个链接。")
-            self._set_status(f"批量任务完成，共完成 {result.completed}/{result.total}")
+        self.no_output_urls = self._dedupe_links(result.no_output_urls)
+        self.failed_urls = self._dedupe_links(result.failed_urls)
+        abnormal_urls = self._dedupe_links(self.no_output_urls + self.failed_urls)
+        file_count = len(result.completed_files)
+        no_output_count = len(self.no_output_urls)
+        failed_count = len(self.failed_urls)
+        summary = (
+            f"批量任务结束：生成音频 {file_count} 个，成功链接 {result.completed} 条，"
+            f"未产出音频 {no_output_count} 条，失败 {failed_count} 条。"
+        )
+        self._append_log("warn" if abnormal_urls else "ok", summary)
+        self._append_link_section("未产出音频链接", self.no_output_urls, "warn")
+        self._append_link_section("失败链接", self.failed_urls, "fail")
 
-        if result.completed_files:
-            message = MessageBox(
-                "下载完成",
-                f"本次生成 {len(result.completed_files)} 个音频文件，是否批量转文字？",
-                self.window(),
+        if abnormal_urls:
+            self.url_edit.setPlainText("\n".join(abnormal_urls))
+            self._append_log("warn", f"已将 {len(abnormal_urls)} 条异常链接填回输入框，可再次点击“开始下载”继续处理。")
+            self._set_status(
+                f"批量任务结束，生成 {file_count} 个音频，剩余异常 {len(abnormal_urls)} 条"
             )
-            if message.exec():
-                self.request_transcribe.emit(result.completed_files, self.config.save_dir)
+        else:
+            self._set_status(f"批量任务完成，生成 {file_count} 个音频")
+
+    def _dedupe_links(self, links: list[str]) -> list[str]:
+        result: list[str] = []
+        seen: set[str] = set()
+        for link in links:
+            key = link.strip().lower()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            result.append(link.strip())
+        return result
+
+    def _append_link_section(self, title: str, links: list[str], level: str) -> None:
+        self._append_log(level if links else "info", f"{title}:")
+        if links:
+            for link in links:
+                self._append_log(level, link)
+        else:
+            self._append_log("info", "无")
 
     def _start_login(self) -> None:
         if self.is_running():

@@ -13,6 +13,7 @@ __pycache__/
 build/
 dist/
 installer_output/
+release_assets/
 *.manifest
 *.spec~
 

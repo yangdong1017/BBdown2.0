@@ -27,6 +27,7 @@ class Toolchain:
 class DownloadBatchResult:
     stopped: bool
     failed_urls: list[str] = field(default_factory=list)
+    no_output_urls: list[str] = field(default_factory=list)
     completed_files: list[str] = field(default_factory=list)
     completed: int = 0
     total: int = 0

@@ -181,6 +181,7 @@ class DownloadWorkerThread(BaseProcessThread):
 
     def run(self) -> None:
         failed_urls: list[str] = []
+        no_output_urls: list[str] = []
         completed_urls: list[str] = []
         completed_files: list[str] = []
         total = len(self.urls)
@@ -208,24 +209,26 @@ class DownloadWorkerThread(BaseProcessThread):
                     break
                 index, url, return_code, files = future.result()
                 with result_lock:
-                    if return_code == 0:
+                    if return_code == 0 and files:
                         completed_urls.append(url)
                         completed_files.extend(files)
-                        if files:
-                            for path in files:
-                                self.log.emit("ok", f"[{index}/{total}] 输出文件: {path}")
-                        else:
-                            self.log.emit("warn", f"[{index}/{total}] 任务完成，但没有定位到音频文件。")
+                        for path in files:
+                            self.log.emit("ok", f"[{index}/{total}] 输出文件: {path}")
                         self.log.emit("ok", f"[{index}/{total}] 任务完成。")
+                    elif return_code == 0:
+                        no_output_urls.append(url)
+                        self.log.emit("warn", f"[{index}/{total}] 任务完成，但未产出音频文件。")
                     else:
                         failed_urls.append(url)
                         self.log.emit("fail", f"[{index}/{total}] 任务失败，退出码: {return_code}")
-                    self.status.emit(self.batch_status_text(len(completed_urls) + len(failed_urls), total))
+                    processed = len(completed_urls) + len(no_output_urls) + len(failed_urls)
+                    self.status.emit(self.batch_status_text(processed, total))
 
         self.finished_all.emit(
             DownloadBatchResult(
                 stopped=self.stop_flag.is_set(),
                 failed_urls=failed_urls,
+                no_output_urls=no_output_urls,
                 completed_files=completed_files,
                 completed=len(completed_urls),
                 total=total,

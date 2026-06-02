@@ -2,7 +2,7 @@
 ; Generated for onedir PyInstaller output
 
 #define MyAppName "BBDown"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.0.1"
 #define MyAppPublisher "BBDown"
 #define MyAppExeName "BBDown.exe"
 
