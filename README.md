@@ -45,7 +45,7 @@ BBDown-Setup-1.0.0.exe
 前往 Releases 下载：
 
 ```text
-BBDown-1.0.0-解压直接用.zip
+BBDown-1.0.0-unzip-run.zip
 ```
 
 使用方法：
