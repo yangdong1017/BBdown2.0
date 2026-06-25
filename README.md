@@ -1,30 +1,33 @@
-# BBDown
+# BBDown2.0
 
-BBDown 是一个 Windows 桌面工具，支持批量下载 B 站视频音频，并将音视频文件批量转写为文字。
+BBDown2.0 是一个 Windows 桌面工具，用来降低批量处理视频、音频素材的操作成本。
 
-## 功能特性
+它支持 B站链接批量下载音频，也支持将抖音音频链接、本地音频、本地视频批量转写为文字，适合整理口播文案、字幕文本和音频内容。
 
-- 批量下载 B 站视频音频
+## 功能
+
+### B站批量下载
+
+- 支持 B站链接批量下载音频
 - 支持一行一个链接批量处理
 - 支持 WEB / TV 扫码登录
-- 自动调用 BBDown、FFmpeg、aria2c
-- 下载后可在转文字页面继续处理音视频文件
-- 支持音频 / 视频文件批量转写
-- 支持必剪、剪映、快手 ASR 接口
-- 支持导出 txt、srt、ass 格式
-- Windows 图形化界面，无需命令行操作
+- 下载失败或未产出音频的链接会自动保留，方便重试
 
-## 运行环境
+### 批量转文字
 
-使用安装包或“解压直接用”版本不需要安装 Python。
+支持两种模式：
 
-运行软件需要：
+1. 抖音链接转文字  
+   粘贴抖音音频直链，或粘贴包含音频直链的整段文本，软件会自动提取可转写链接。
 
-- Windows 10 / Windows 11
-- 网络连接
-- 可选：哔哩哔哩 App，用于扫码登录舰长权限视频或其他需要登录权限的视频
+2. 音视频转文字  
+   选择本地音频、视频文件，或直接选择文件夹批量转写。
 
-如果需要从源码运行或自行打包，则需要额外安装 Python 3.10+。
+支持导出格式：
+
+- txt
+- srt
+- ass
 
 ## 安装方式
 
@@ -33,19 +36,17 @@ BBDown 是一个 Windows 桌面工具，支持批量下载 B 站视频音频，�
 前往 Releases 下载：
 
 ```text
-BBDown-Setup-1.0.1.exe
+BBDown-Setup-2.0.0.exe
 ```
 
 双击安装包，按照提示安装即可。
-
-这种方式会创建软件安装目录和快捷方式，适合大多数用户。
 
 ### 方式二：解压直接用
 
 前往 Releases 下载：
 
 ```text
-BBDown-1.0.1-unzip-run.zip
+BBDown-2.0.0-unzip-run.zip
 ```
 
 使用方法：
@@ -58,7 +59,7 @@ BBDown-1.0.1-unzip-run.zip
 
 ## 源码运行
 
-如果你下载的是源码，需要先安装 Python 环境和项目依赖。
+如果你下载的是源码，需要先安装 Python 3.10+。
 
 打开 PowerShell，进入项目目录后执行：
 
@@ -69,36 +70,32 @@ python -m venv .venv
 .\.venv\Scripts\python.exe app.py
 ```
 
-依赖安装完成后，后续可以直接双击运行：
+依赖安装完成后，后续可以直接双击：
 
 ```text
 run_source.bat
 ```
 
-不建议直接双击 `app.py`。直接双击可能不会使用项目里的 `.venv` 虚拟环境，容易出现依赖找不到、窗口打不开等问题。
+## 项目结构
 
-## 使用方法
-
-1. 打开软件。
-2. 在“批量下载”页面粘贴 B 站链接，一行一个。
-3. 选择保存目录和下载并发数。
-4. 如内容需要登录权限，先使用二维码扫码登录。
-5. 点击“开始下载”。
-6. 任务结束后查看统计结果：生成音频、成功链接、未产出音频、失败。
-7. 如果存在未产出音频或失败链接，软件会把这些异常链接自动填回输入框。
-8. 需要继续处理异常链接时，再次点击“开始下载”。
-9. 需要转文字时，进入“批量转文字”页面，选择音视频文件或使用下载目录。
-10. 选择 ASR 接口、输出格式和并发数，点击“开始转文字”。
-
-## 输出格式
-
-转写结果支持以下格式：
-
-- `txt`：普通文本
-- `srt`：字幕文件
-- `ass`：高级字幕文件
-
-默认输出到源文件所在目录，也可以在界面中手动选择输出目录。
+```text
+BBDown2.0/
+├─ app.py
+├─ core/                         # 下载、配置、任务调度、转写服务
+│  ├─ asr_service.py              # ASR 接口封装
+│  ├─ asr_task.py                 # 转写任务处理
+│  ├─ asr_file_worker.py          # 本地文件转写后台任务
+│  ├─ url_asr_worker.py           # 音频链接转写后台任务
+│  ├─ url_audio.py                # 音频链接识别和读取
+│  ├─ task_scheduler.py           # 并发任务调度
+│  └─ workers.py                  # B站下载和登录后台任务
+├─ ui/                            # 图形界面
+├─ bk_asr/                        # ASR 实现
+├─ tools/                         # BBDown、FFmpeg、aria2c
+├─ requirements.txt
+├─ build_bbdown_launcher.spec
+└─ installer.iss
+```
 
 ## 打包
 
@@ -114,7 +111,7 @@ run_source.bat
 dist\BBDown\BBDown.exe
 ```
 
-如需生成安装包，可安装 Inno Setup 6，然后执行：
+如需生成安装包，需要先安装 Inno Setup 6，然后执行：
 
 ```powershell
 ISCC.exe installer.iss
@@ -124,20 +121,6 @@ ISCC.exe installer.iss
 
 ```text
 installer_output\
-```
-
-## 项目结构
-
-```text
-BBDown/
-├─ app.py
-├─ core/              # 下载、配置、工具链、后台任务
-├─ ui/                # 图形界面
-├─ bk_asr/            # ASR 转写模块
-├─ tools/             # BBDown、FFmpeg、aria2c
-├─ requirements.txt
-├─ build_bbdown_launcher.spec
-└─ installer.iss
 ```
 
 ## 作者声明
