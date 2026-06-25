@@ -19,9 +19,14 @@ TOOLS_DIR = APP_ROOT / "bbdown_tools"
 
 MIN_CONCURRENCY = 5
 THREAD_OPTIONS = (5, 8, 10)
-ASR_ENGINE_OPTIONS = ("必剪", "剪映", "快手")
+BCUT_ENGINE_NAME = "必剪"
+DOUBAO_ENGINE_NAME = "豆包"
+ASR_ENGINE_OPTIONS = (BCUT_ENGINE_NAME, DOUBAO_ENGINE_NAME)
+LOCAL_FILE_ASR_ENGINE_OPTIONS = (BCUT_ENGINE_NAME,)
 ASR_FORMAT_OPTIONS = ("txt", "srt", "ass")
 ASR_CONCURRENCY_OPTIONS = (5, 8, 10)
+DOUBAO_ASR_CONCURRENCY_OPTIONS = (5, 8, 10, 30, 50)
+ALL_ASR_CONCURRENCY_OPTIONS = tuple(sorted(set(ASR_CONCURRENCY_OPTIONS + DOUBAO_ASR_CONCURRENCY_OPTIONS)))
 ASR_MODE_OPTIONS = ("抖音链接转文字", "音视频转文字")
 DEFAULT_THREAD_COUNT = 5
 DEFAULT_ASR_CONCURRENCY = 5
@@ -63,9 +68,9 @@ def load_app_config() -> AppConfig:
     if not isinstance(save_dir, str):
         save_dir = str(Path.home() / "Downloads")
 
-    asr_engine = data.get("asr_engine") or "必剪"
+    asr_engine = data.get("asr_engine") or BCUT_ENGINE_NAME
     if asr_engine not in ASR_ENGINE_OPTIONS:
-        asr_engine = "必剪"
+        asr_engine = BCUT_ENGINE_NAME
 
     asr_format = data.get("asr_format") or "txt"
     if asr_format not in ASR_FORMAT_OPTIONS:
@@ -73,7 +78,7 @@ def load_app_config() -> AppConfig:
 
     asr_concurrency = _normalize_concurrency(
         data.get("asr_concurrency", DEFAULT_ASR_CONCURRENCY),
-        options=ASR_CONCURRENCY_OPTIONS,
+        options=ALL_ASR_CONCURRENCY_OPTIONS,
         default=DEFAULT_ASR_CONCURRENCY,
     )
 

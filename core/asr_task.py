@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from core.asr_service import format_task_error, transcribe_audio
+from core.config import DOUBAO_ENGINE_NAME
+from core.doubao_asr import transcribe_doubao_url
 from core.media import convert_to_mp3, is_audio
 from core.url_audio import audio_name_from_url, fetch_audio_bytes
 
@@ -27,6 +29,29 @@ def write_transcript(
     export_format: str,
 ) -> str:
     text = transcribe_audio(audio_input, engine_name, export_format, use_cache=True)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(text, encoding="utf-8")
+    return str(output_path)
+
+
+def write_url_transcript(
+    url: str,
+    output_path: Path,
+    engine_name: str,
+    export_format: str,
+    *,
+    stopped: Callable[[], bool],
+) -> str:
+    if engine_name == DOUBAO_ENGINE_NAME:
+        text = transcribe_doubao_url(url, export_format, stopped=stopped)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(text, encoding="utf-8")
+        return str(output_path)
+
+    audio_bytes, _ = fetch_audio_bytes(url)
+    if stopped():
+        raise RuntimeError("已停止")
+    text = transcribe_audio(audio_bytes, engine_name, export_format, use_cache=True)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(text, encoding="utf-8")
     return str(output_path)
@@ -92,16 +117,18 @@ def process_url_asr_task(
         return ASRTaskResult(index, url, "skip", f"{out_path.name} 已存在", str(out_path))
 
     try:
-        audio_bytes, content_type = fetch_audio_bytes(url)
-        if stopped():
-            return ASRTaskResult(index, url, "stopped", "已停止")
-
-        output_path = write_transcript(audio_bytes, out_path, engine_name, export_format)
+        output_path = write_url_transcript(
+            url,
+            out_path,
+            engine_name,
+            export_format,
+            stopped=stopped,
+        )
         detail = out_path.name
-        if content_type:
-            detail = f"{detail} | {content_type}"
         return ASRTaskResult(index, url, "ok", detail, output_path)
     except Exception as exc:
+        if stopped() and str(exc).strip() == "已停止":
+            return ASRTaskResult(index, url, "stopped", "已停止")
         return ASRTaskResult(index, url, "fail", f"{stem}: {format_task_error(exc)}")
 
 

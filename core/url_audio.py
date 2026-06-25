@@ -9,6 +9,10 @@ import requests
 
 URL_RE = re.compile(r"https?://[^\s<>'\"]+", re.IGNORECASE)
 AUDIO_SUFFIXES = (".mp3", ".m4a", ".aac", ".wav", ".flac", ".ogg")
+DOUBAO_DIRECT_SUFFIXES = {
+    ".mp3": "mp3",
+    ".wav": "wav",
+}
 AUDIO_PATH_HINTS = (
     "/ies-music",
     "/obj/ies-music",
@@ -107,6 +111,45 @@ def fetch_audio_bytes(
     if not data:
         raise AudioUrlError("没有读取到音频内容")
     return bytes(data), content_type
+
+
+def infer_doubao_direct_format(url: str) -> tuple[str, str]:
+    parsed = urlparse(url)
+    suffix = Path(unquote(parsed.path)).suffix.lower()
+    if suffix in DOUBAO_DIRECT_SUFFIXES:
+        return DOUBAO_DIRECT_SUFFIXES[suffix], ""
+    if suffix in AUDIO_SUFFIXES:
+        raise AudioUrlError("豆包直链模式暂只支持 mp3/wav，这条链接不是可直接识别的 mp3/wav。")
+
+    content_type = probe_audio_content_type(url)
+    normalized_type = content_type.split(";", 1)[0].strip().lower()
+    if normalized_type in {"audio/mpeg", "audio/mp3"}:
+        return "mp3", content_type
+    if normalized_type in {"audio/wav", "audio/x-wav", "audio/wave"}:
+        return "wav", content_type
+    if normalized_type in {"audio/mp4", "audio/aac", "audio/x-m4a"}:
+        raise AudioUrlError("豆包直链模式暂只支持 mp3/wav，这条链接是 audio/mp4/m4a，不能直接提交。")
+    raise AudioUrlError("无法判断这条链接是否为 mp3/wav，豆包直链模式暂不处理。")
+
+
+def probe_audio_content_type(url: str, *, timeout: tuple[int, int] = (8, 20)) -> str:
+    try:
+        response = requests.head(url, headers=DEFAULT_HEADERS, timeout=timeout, allow_redirects=True)
+        if response.ok:
+            content_type = response.headers.get("content-type", "")
+            if content_type:
+                return content_type
+    except requests.RequestException:
+        pass
+
+    headers = dict(DEFAULT_HEADERS)
+    headers["Range"] = "bytes=0-0"
+    with requests.get(url, headers=headers, timeout=timeout, stream=True) as response:
+        response.raise_for_status()
+        content_type = response.headers.get("content-type", "")
+        if "text/html" in content_type.lower():
+            raise AudioUrlError("链接返回的是网页，不是音频文件")
+        return content_type
 
 
 def _safe_stem(value: str) -> str:

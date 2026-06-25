@@ -24,6 +24,9 @@ from core.config import (
     ASR_ENGINE_OPTIONS,
     ASR_FORMAT_OPTIONS,
     ASR_MODE_OPTIONS,
+    DOUBAO_ENGINE_NAME,
+    DOUBAO_ASR_CONCURRENCY_OPTIONS,
+    LOCAL_FILE_ASR_ENGINE_OPTIONS,
     load_app_config,
     save_app_config,
 )
@@ -78,6 +81,7 @@ class ASRPage(QWidget):
         options.addWidget(BodyLabel("ASR 接口:", self))
         self.engine_combo = ComboBox(self)
         self.engine_combo.addItems(list(ASR_ENGINE_OPTIONS))
+        self.engine_combo.currentTextChanged.connect(self._on_engine_changed)
         options.addWidget(self.engine_combo)
         options.addSpacing(12)
 
@@ -167,10 +171,12 @@ class ASRPage(QWidget):
 
     def _apply_state(self) -> None:
         self.mode_combo.setCurrentText(self.config.asr_mode)
-        self.engine_combo.setCurrentText(self.config.asr_engine)
+        self._sync_engine_options(self.mode_combo.currentText())
+        if self.config.asr_engine in self._current_engine_options():
+            self.engine_combo.setCurrentText(self.config.asr_engine)
         self.format_combo.setCurrentText(self.config.asr_format)
         self.concurrency_combo.setCurrentText(str(self.config.asr_concurrency))
-        self._on_mode_changed(self.mode_combo.currentText())
+        self._on_engine_changed(self.engine_combo.currentText())
         self._refresh_out_label()
 
     def _save_state(self) -> None:
@@ -185,6 +191,7 @@ class ASRPage(QWidget):
 
     def _on_mode_changed(self, mode: str) -> None:
         is_douyin = mode == DOUYIN_ASR_MODE
+        self._sync_engine_options(mode)
         self.add_files_btn.setVisible(not is_douyin)
         self.add_folder_btn.setVisible(not is_douyin)
         self.use_download_dir_btn.setVisible(not is_douyin)
@@ -193,6 +200,37 @@ class ASRPage(QWidget):
         self.clear_btn.setText("清空链接" if is_douyin else "清空列表")
         self.config.asr_mode = mode
         self._refresh_out_label()
+
+    def _current_engine_options(self) -> tuple[str, ...]:
+        if self._is_douyin_mode():
+            return ASR_ENGINE_OPTIONS
+        return LOCAL_FILE_ASR_ENGINE_OPTIONS
+
+    def _sync_engine_options(self, mode: str) -> None:
+        options = ASR_ENGINE_OPTIONS if mode == DOUYIN_ASR_MODE else LOCAL_FILE_ASR_ENGINE_OPTIONS
+        current = self.engine_combo.currentText() or self.config.asr_engine
+        self.engine_combo.blockSignals(True)
+        self.engine_combo.clear()
+        self.engine_combo.addItems(list(options))
+        self.engine_combo.setCurrentText(current if current in options else options[0])
+        self.engine_combo.blockSignals(False)
+        self._on_engine_changed(self.engine_combo.currentText())
+
+    def _on_engine_changed(self, engine_name: str) -> None:
+        is_doubao = engine_name == DOUBAO_ENGINE_NAME
+        self._sync_concurrency_options(engine_name)
+        if is_doubao:
+            self.format_combo.setCurrentText("txt")
+        self.format_combo.setEnabled(not is_doubao)
+
+    def _sync_concurrency_options(self, engine_name: str) -> None:
+        options = DOUBAO_ASR_CONCURRENCY_OPTIONS if engine_name == DOUBAO_ENGINE_NAME else ASR_CONCURRENCY_OPTIONS
+        current = self.concurrency_combo.currentText() or str(self.config.asr_concurrency)
+        self.concurrency_combo.blockSignals(True)
+        self.concurrency_combo.clear()
+        self.concurrency_combo.addItems([str(value) for value in options])
+        self.concurrency_combo.setCurrentText(current if int(current or 0) in options else str(options[0]))
+        self.concurrency_combo.blockSignals(False)
 
     def _refresh_out_label(self) -> None:
         if self.config.asr_output_dir:

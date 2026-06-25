@@ -4,13 +4,12 @@ from pathlib import Path
 
 import requests
 
-from bk_asr import BcutASR, JianYingASR, KuaiShouASR
+from bk_asr import BcutASR
+from core.config import BCUT_ENGINE_NAME
 
 
 ENGINE_MAP = {
-    "必剪": BcutASR,
-    "剪映": JianYingASR,
-    "快手": KuaiShouASR,
+    BCUT_ENGINE_NAME: BcutASR,
 }
 
 
@@ -21,6 +20,8 @@ def transcribe_audio(
     *,
     use_cache: bool = True,
 ) -> str:
+    if engine_name not in ENGINE_MAP:
+        raise ValueError(f"{engine_name} 不支持本地音频上传识别。")
     engine_cls = ENGINE_MAP[engine_name]
     result = engine_cls(_normalize_audio_input(audio_input), use_cache=use_cache).run()
     return export_asr_result(result, export_format)

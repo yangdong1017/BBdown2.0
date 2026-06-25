@@ -33,8 +33,7 @@ hiddenimports += [
     "bk_asr.ASRData",
     "bk_asr.BaseASR",
     "bk_asr.BcutASR",
-    "bk_asr.JianYingASR",
-    "bk_asr.KuaiShouASR",
+    "core.doubao_asr",
 ]
 
 a = Analysis(
