@@ -123,6 +123,56 @@ ISCC.exe installer.iss
 installer_output\
 ```
 
+## 发布维护流程
+
+每次发布新版本时，先本地打包，再创建 GitHub Release。
+
+1. 更新版本相关文件：
+
+```text
+README.md
+installer.iss
+```
+
+2. 生成解压版：
+
+```powershell
+.\.venv\Scripts\python.exe -m PyInstaller build_bbdown_launcher.spec --noconfirm --clean
+Compress-Archive -Path .\dist\BBDown\* -DestinationPath .\BBDown-2.0.0-unzip-run.zip -Force
+```
+
+3. 生成安装包：
+
+```powershell
+ISCC.exe installer.iss
+```
+
+如果 `ISCC.exe` 不在 PATH，可以使用：
+
+```powershell
+& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" .\installer.iss
+```
+
+生成文件：
+
+```text
+installer_output\BBDown-Setup-2.0.0.exe
+```
+
+4. 先测试本地产物：
+
+```text
+dist\BBDown\BBDown.exe
+BBDown-2.0.0-unzip-run.zip
+installer_output\BBDown-Setup-2.0.0.exe
+```
+
+5. 测试无误后，再创建 GitHub Release 并上传安装包和解压包。
+
+注意：不要只更新 README 就创建 Release。Release 必须对应已经本地打包并测试过的安装包和解压包。
+
+发布包不要提交到 Git 仓库，只上传到 GitHub Release。
+
 ## 作者声明
 
 本仓库由作者借助人工智能工具整理、开发和维护。
