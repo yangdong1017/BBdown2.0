@@ -16,7 +16,7 @@ QFrame[card="true"] {
 """
 
 TEXT_EDIT_STYLE = """
-QTextEdit {
+QTextEdit, QPlainTextEdit {
     background-color: #141414;
     color: #f5f7fa;
     selection-background-color: #4cc2ff;

@@ -4,15 +4,15 @@ import subprocess
 import shutil
 import threading
 import uuid
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from PyQt5.QtCore import QThread, pyqtSignal
 
 from .commands import build_download_command, build_login_command, shell_join
-from .config import ENABLE_BBDOWN_DEBUG, MAX_LOG_LINE_LENGTH
+from .config import ENABLE_BBDOWN_DEBUG, MAX_LOG_LINE_LENGTH, MIN_CONCURRENCY
 from .media import MEDIA_EXTENSIONS
 from .models import DownloadBatchResult, LoginResult, Toolchain
+from .task_scheduler import run_limited_tasks
 
 
 class BaseProcessThread(QThread):
@@ -129,6 +129,7 @@ class BaseProcessThread(QThread):
 
 class DownloadWorkerThread(BaseProcessThread):
     finished_all = pyqtSignal(object)
+    progress = pyqtSignal(int, int, int)
 
     def __init__(
         self,
@@ -143,7 +144,7 @@ class DownloadWorkerThread(BaseProcessThread):
         super().__init__(runtime_dir, log_encoding, parent)
         self.urls = urls
         self.save_dir = save_dir
-        self.thread_count = max(1, int(thread_count))
+        self.thread_count = max(MIN_CONCURRENCY, int(thread_count))
         self.toolchain = toolchain
         self.save_path = Path(save_dir)
 
@@ -186,13 +187,28 @@ class DownloadWorkerThread(BaseProcessThread):
         completed_files: list[str] = []
         total = len(self.urls)
         result_lock = threading.Lock()
+        progress_lock = threading.Lock()
+        processed = 0
+        active_jobs = 0
+        processed_indices: set[int] = set()
+
+        def emit_progress() -> None:
+            self.progress.emit(processed, total, active_jobs)
+            self.status.emit(
+                f"批量下载中 {processed}/{total} | 进行中 {active_jobs} | 并发上限 {self.thread_count}"
+            )
+
         self.log.emit("info", f"批量任务开始，共 {total} 个链接，最多 {self.thread_count} 个同时运行。")
-        self.status.emit(self.batch_status_text(0, total))
+        emit_progress()
 
         def worker(index: int, url: str) -> tuple[int, str, int, list[str]]:
+            nonlocal active_jobs
             if self.stop_flag.is_set():
                 return index, url, 1, []
             self.log.emit("info", f"[{index}/{total}] 开始处理: {url}")
+            with progress_lock:
+                active_jobs += 1
+                emit_progress()
             job_dir = self._job_dir(index)
             try:
                 command = build_download_command(url, str(job_dir), self.thread_count, self.toolchain)
@@ -200,29 +216,40 @@ class DownloadWorkerThread(BaseProcessThread):
                 files = self._move_job_outputs(job_dir) if return_code == 0 else []
                 return index, url, return_code, files
             finally:
+                with progress_lock:
+                    active_jobs = max(0, active_jobs - 1)
+                    emit_progress()
                 shutil.rmtree(job_dir, ignore_errors=True)
 
-        with ThreadPoolExecutor(max_workers=min(self.thread_count, total)) as pool:
-            futures = [pool.submit(worker, index, url) for index, url in enumerate(self.urls, start=1)]
-            for future in as_completed(futures):
-                if self.stop_flag.is_set():
-                    break
-                index, url, return_code, files = future.result()
-                with result_lock:
-                    if return_code == 0 and files:
-                        completed_urls.append(url)
-                        completed_files.extend(files)
-                        for path in files:
-                            self.log.emit("ok", f"[{index}/{total}] 输出文件: {path}")
-                        self.log.emit("ok", f"[{index}/{total}] 任务完成。")
-                    elif return_code == 0:
-                        no_output_urls.append(url)
-                        self.log.emit("warn", f"[{index}/{total}] 任务完成，但未产出音频文件。")
-                    else:
-                        failed_urls.append(url)
-                        self.log.emit("fail", f"[{index}/{total}] 任务失败，退出码: {return_code}")
-                    processed = len(completed_urls) + len(no_output_urls) + len(failed_urls)
-                    self.status.emit(self.batch_status_text(processed, total))
+        for result in run_limited_tasks(
+            self.urls,
+            max_workers=min(self.thread_count, max(total, 1)),
+            submit_one=worker,
+            should_stop=self.stop_flag.is_set,
+            start_index=1,
+        ):
+            index, url, return_code, files = result
+            processed_indices.add(index)
+            with result_lock:
+                processed += 1
+                if return_code == 0 and files:
+                    completed_urls.append(url)
+                    completed_files.extend(files)
+                    for path in files:
+                        self.log.emit("ok", f"[{index}/{total}] 输出文件: {path}")
+                    self.log.emit("ok", f"[{index}/{total}] 任务完成。")
+                elif return_code == 0:
+                    no_output_urls.append(url)
+                    self.log.emit("warn", f"[{index}/{total}] 任务完成，但未产出音频文件。")
+                else:
+                    failed_urls.append(url)
+                    self.log.emit("fail", f"[{index}/{total}] 任务失败，退出码: {return_code}")
+                emit_progress()
+
+        if self.stop_flag.is_set():
+            for index, url in enumerate(self.urls, start=1):
+                if index not in processed_indices:
+                    failed_urls.append(url)
 
         self.finished_all.emit(
             DownloadBatchResult(

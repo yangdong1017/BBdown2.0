@@ -1,39 +1,39 @@
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
-import tempfile
-import threading
-import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from PyQt5.QtCore import Qt, QThread, pyqtSignal
+from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QFileDialog,
     QHBoxLayout,
     QHeaderView,
+    QPlainTextEdit,
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 from qfluentwidgets import BodyLabel, ComboBox, MessageBox, PrimaryPushButton, PushButton, TableWidget, TitleLabel
+from qfluentwidgets import ProgressBar
 
-from bk_asr import BcutASR, JianYingASR, KuaiShouASR
-from core.config import ASR_CONCURRENCY_OPTIONS, ASR_ENGINE_OPTIONS, ASR_FORMAT_OPTIONS, load_app_config, save_app_config
-from core.media import MEDIA_EXTENSIONS, convert_to_mp3, is_audio, is_media
+from core.config import (
+    ASR_CONCURRENCY_OPTIONS,
+    ASR_ENGINE_OPTIONS,
+    ASR_FORMAT_OPTIONS,
+    ASR_MODE_OPTIONS,
+    load_app_config,
+    save_app_config,
+)
+from core.asr_file_worker import ASRWorkerThread
+from core.media import MEDIA_EXTENSIONS, is_media
 from core.toolchain import resolve_toolchain
-from .widgets import ConsoleLog
+from core.url_asr_worker import UrlASRBatchResult, UrlASRWorkerThread, default_url_output_dir
+from core.url_audio import extract_audio_urls
+from .widgets import ConsoleLog, TEXT_EDIT_STYLE
 
-
-ENGINE_MAP = {
-    "必剪": BcutASR,
-    "剪映": JianYingASR,
-    "快手": KuaiShouASR,
-}
 
 STATUS_COLORS = {
     "处理中": "#e5b84a",
@@ -43,108 +43,7 @@ STATUS_COLORS = {
     "未处理": "#a8a8a8",
 }
 
-
-class ASRWorkerThread(QThread):
-    progress = pyqtSignal(int, str, str, str)
-    file_status = pyqtSignal(int, str)
-    count = pyqtSignal(int, int, int, int, str)
-    finished_all = pyqtSignal(str)
-
-    def __init__(
-        self,
-        files: list[str],
-        engine_name: str,
-        export_format: str,
-        concurrency: int,
-        out_dir: str,
-        ffmpeg_path: str | None,
-        parent=None,
-    ) -> None:
-        super().__init__(parent)
-        self.files = files
-        self.engine_name = engine_name
-        self.export_format = export_format.lower()
-        self.concurrency = max(1, int(concurrency))
-        self.out_dir = out_dir
-        self.ffmpeg_path = ffmpeg_path
-        self.stop_flag = threading.Event()
-
-    def stop(self) -> None:
-        self.stop_flag.set()
-
-    def _process_one(self, index: int, path: str) -> tuple[int, str, str, str]:
-        if self.stop_flag.is_set():
-            return index, path, "stopped", "已停止"
-
-        source = Path(path)
-        out_dir = Path(self.out_dir) if self.out_dir else source.parent
-        out_path = out_dir / f"{source.stem}.{self.export_format}"
-
-        if out_path.exists() and out_path.stat().st_size > 0:
-            return index, path, "skip", f"{source.name} -> 已存在"
-
-        self.file_status.emit(index, "处理中")
-
-        audio_path = source
-        temp_audio: str | None = None
-        if not is_audio(source):
-            fd, temp_audio = tempfile.mkstemp(suffix=".mp3", prefix=f"asr_{source.stem[:40]}_")
-            os.close(fd)
-            if not convert_to_mp3(source, temp_audio, self.ffmpeg_path):
-                try:
-                    os.remove(temp_audio)
-                except OSError:
-                    pass
-                return index, path, "fail", f"{source.name}: ffmpeg 转音频失败"
-            audio_path = Path(temp_audio)
-
-        try:
-            engine_cls = ENGINE_MAP[self.engine_name]
-            result = engine_cls(str(audio_path), use_cache=True).run()
-            if self.export_format == "srt":
-                text = result.to_srt()
-            elif self.export_format == "ass":
-                text = result.to_ass()
-            else:
-                text = result.to_txt()
-            out_dir.mkdir(parents=True, exist_ok=True)
-            out_path.write_text(text, encoding="utf-8")
-            return index, path, "ok", f"{source.name} -> {out_path.name}"
-        except Exception as exc:
-            return index, path, "fail", f"{source.name}: {exc}"
-        finally:
-            if temp_audio and os.path.exists(temp_audio):
-                try:
-                    os.remove(temp_audio)
-                except OSError:
-                    pass
-
-    def run(self) -> None:
-        total = len(self.files)
-        ok = skip = fail = 0
-        started = time.time()
-
-        with ThreadPoolExecutor(max_workers=min(self.concurrency, max(total, 1))) as pool:
-            futures = [pool.submit(self._process_one, index, path) for index, path in enumerate(self.files)]
-            for future in as_completed(futures):
-                index, path, status, message = future.result()
-                if status == "ok":
-                    ok += 1
-                    self.file_status.emit(index, "已完成")
-                elif status == "skip":
-                    skip += 1
-                    self.file_status.emit(index, "跳过")
-                elif status == "stopped":
-                    self.file_status.emit(index, "未处理")
-                else:
-                    fail += 1
-                    self.file_status.emit(index, "失败")
-                self.progress.emit(index, path, status, message)
-                self.count.emit(ok, skip, fail, total, Path(path).name)
-
-        minutes, seconds = divmod(int(time.time() - started), 60)
-        prefix = "已停止" if self.stop_flag.is_set() else "完成"
-        self.finished_all.emit(f"{prefix}: 成功 {ok} 跳过 {skip} 失败 {fail} | 耗时 {minutes:02d}:{seconds:02d}")
+DOUYIN_ASR_MODE = "抖音链接转文字"
 
 
 class ASRPage(QWidget):
@@ -156,6 +55,7 @@ class ASRPage(QWidget):
         self.config = load_app_config()
         self.toolchain = resolve_toolchain()
         self.worker: ASRWorkerThread | None = None
+        self.url_worker: UrlASRWorkerThread | None = None
         self.row_index_map: list[int] = []
         self._build_ui()
         self._apply_state()
@@ -165,7 +65,14 @@ class ASRPage(QWidget):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(10)
 
-        layout.addWidget(TitleLabel("批量转文字", self))
+        title_row = QHBoxLayout()
+        title_row.addWidget(TitleLabel("批量转文字", self))
+        self.mode_combo = ComboBox(self)
+        self.mode_combo.addItems(list(ASR_MODE_OPTIONS))
+        self.mode_combo.currentTextChanged.connect(self._on_mode_changed)
+        title_row.addWidget(self.mode_combo)
+        title_row.addStretch(1)
+        layout.addLayout(title_row)
 
         options = QHBoxLayout()
         options.addWidget(BodyLabel("ASR 接口:", self))
@@ -203,7 +110,7 @@ class ASRPage(QWidget):
         self.add_folder_btn.clicked.connect(self._select_folder)
         self.use_download_dir_btn = PushButton("使用下载目录", self)
         self.use_download_dir_btn.clicked.connect(self.request_download_dir.emit)
-        self.clear_btn = PushButton("清空列表", self)
+        self.clear_btn = PushButton("清空输入", self)
         self.clear_btn.clicked.connect(self._clear_files)
         file_row.addWidget(self.add_files_btn)
         file_row.addWidget(self.add_folder_btn)
@@ -211,6 +118,13 @@ class ASRPage(QWidget):
         file_row.addWidget(self.clear_btn)
         file_row.addStretch(1)
         layout.addLayout(file_row)
+
+        self.url_edit = QPlainTextEdit(self)
+        self.url_edit.setPlaceholderText("粘贴抖音音频链接，一行一个；也可以直接粘贴整段文本。")
+        self.url_edit.setMinimumHeight(76)
+        self.url_edit.setMaximumHeight(110)
+        self.url_edit.setStyleSheet(TEXT_EDIT_STYLE)
+        layout.addWidget(self.url_edit)
 
         self.table = TableWidget(self)
         self.table.setBorderVisible(True)
@@ -226,6 +140,15 @@ class ASRPage(QWidget):
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         layout.addWidget(self.table, 1)
+
+        progress_row = QHBoxLayout()
+        self.progress_bar = ProgressBar(self)
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_label = BodyLabel("进度 0/0", self)
+        progress_row.addWidget(self.progress_bar, 1)
+        progress_row.addWidget(self.progress_label)
+        layout.addLayout(progress_row)
 
         action_row = QHBoxLayout()
         self.start_btn = PrimaryPushButton("开始转文字", self)
@@ -243,19 +166,41 @@ class ASRPage(QWidget):
         self.setAcceptDrops(True)
 
     def _apply_state(self) -> None:
+        self.mode_combo.setCurrentText(self.config.asr_mode)
         self.engine_combo.setCurrentText(self.config.asr_engine)
         self.format_combo.setCurrentText(self.config.asr_format)
         self.concurrency_combo.setCurrentText(str(self.config.asr_concurrency))
+        self._on_mode_changed(self.mode_combo.currentText())
         self._refresh_out_label()
 
     def _save_state(self) -> None:
+        self.config.asr_mode = self.mode_combo.currentText()
         self.config.asr_engine = self.engine_combo.currentText()
         self.config.asr_format = self.format_combo.currentText()
         self.config.asr_concurrency = int(self.concurrency_combo.currentText())
         save_app_config(self.config)
 
+    def _is_douyin_mode(self) -> bool:
+        return self.mode_combo.currentText() == DOUYIN_ASR_MODE
+
+    def _on_mode_changed(self, mode: str) -> None:
+        is_douyin = mode == DOUYIN_ASR_MODE
+        self.add_files_btn.setVisible(not is_douyin)
+        self.add_folder_btn.setVisible(not is_douyin)
+        self.use_download_dir_btn.setVisible(not is_douyin)
+        self.table.setVisible(not is_douyin)
+        self.url_edit.setVisible(is_douyin)
+        self.clear_btn.setText("清空链接" if is_douyin else "清空列表")
+        self.config.asr_mode = mode
+        self._refresh_out_label()
+
     def _refresh_out_label(self) -> None:
-        text = self.config.asr_output_dir if self.config.asr_output_dir else "默认: 与源文件同目录"
+        if self.config.asr_output_dir:
+            text = self.config.asr_output_dir
+        elif self._is_douyin_mode():
+            text = f"默认: {default_url_output_dir()}"
+        else:
+            text = "默认: 与源文件同目录"
         self.out_dir_label.setText(text)
 
     def _choose_out_dir(self) -> None:
@@ -271,10 +216,12 @@ class ASRPage(QWidget):
 
     def _open_out(self) -> None:
         target = self.config.asr_output_dir
-        if not target and self.table.rowCount() > 0:
+        if not target and not self._is_douyin_mode() and self.table.rowCount() > 0:
             item = self.table.item(0, 0)
             path = item.data(Qt.UserRole) if item else ""
             target = str(Path(path).parent) if path else ""
+        if not target and self._is_douyin_mode():
+            target = str(default_url_output_dir())
         if not target or not Path(target).is_dir():
             return
         if sys.platform == "win32":
@@ -337,7 +284,11 @@ class ASRPage(QWidget):
             self.log.log("info", f"添加 {added} 个文件")
 
     def _clear_files(self) -> None:
-        self.table.setRowCount(0)
+        if self._is_douyin_mode():
+            self.url_edit.clear()
+        else:
+            self.table.setRowCount(0)
+        self._set_asr_progress(0, 0)
 
     def _collect_unprocessed(self) -> list[tuple[int, str]]:
         files: list[tuple[int, str]] = []
@@ -351,17 +302,30 @@ class ASRPage(QWidget):
         return files
 
     def _start(self) -> None:
-        if self.worker and self.worker.isRunning():
+        if self.is_running():
             self.stop()
             return
-        pending = self._collect_unprocessed()
-        if not pending:
-            MessageBox("提示", "没有需要处理的文件。", self.window()).exec()
+
+        if self._is_douyin_mode():
+            url_pending = extract_audio_urls(self.url_edit.toPlainText())
+            if not url_pending:
+                MessageBox("提示", "没有检测到可转写的抖音音频链接。", self.window()).exec()
+                return
+            self._start_url_asr(url_pending)
             return
 
+        pending = self._collect_unprocessed()
+        if not pending:
+            MessageBox("提示", "没有需要处理的音视频文件。", self.window()).exec()
+            return
+
+        self._start_file_asr(pending)
+
+    def _start_file_asr(self, pending: list[tuple[int, str]]) -> None:
         self._save_state()
         self.row_index_map = [row for row, _ in pending]
         files = [path for _, path in pending]
+        self._set_asr_progress(0, len(files))
         ffmpeg_path = str(self.toolchain.ffmpeg) if self.toolchain.ffmpeg else None
         self.log.log(
             "info",
@@ -383,12 +347,45 @@ class ASRPage(QWidget):
         self.worker.count.connect(self._on_count)
         self.worker.finished_all.connect(self._on_finished)
         self.worker.start()
+        self.start_btn.setEnabled(True)
+        self.start_btn.setText("停止")
+
+    def _start_url_asr(self, urls: list[str]) -> None:
+        self._save_state()
+        self.row_index_map = []
+        self._set_asr_progress(0, len(urls))
+        self.log.log(
+            "info",
+            f"开始音频链接转文字: {len(urls)} 条 | {self.config.asr_engine} | {self.config.asr_format} | 并发 {self.config.asr_concurrency}",
+        )
+
+        self.url_worker = UrlASRWorkerThread(
+            urls=urls,
+            engine_name=self.config.asr_engine,
+            export_format=self.config.asr_format,
+            concurrency=self.config.asr_concurrency,
+            out_dir=self.config.asr_output_dir,
+        )
+        self.url_worker.progress.connect(self._on_url_progress)
+        self.url_worker.count.connect(self._on_url_count)
+        self.url_worker.finished_all.connect(self._on_url_finished)
+        self.url_worker.start()
+        self.start_btn.setEnabled(True)
         self.start_btn.setText("停止")
 
     def stop(self) -> None:
-        if self.worker:
+        stopped = False
+        if self.worker and self.worker.isRunning():
             self.worker.stop()
-            self.log.log("warn", "正在停止转文字任务...")
+            stopped = True
+        if self.url_worker and self.url_worker.isRunning():
+            self.url_worker.stop()
+            stopped = True
+        if stopped:
+            self.start_btn.setEnabled(False)
+            self.start_btn.setText("正在停止")
+            self.progress_label.setText(self.progress_label.text().replace("进度", "停止中", 1))
+            self.log.log("warn", "正在停止：不会再开始新任务，正在等待当前任务结束。")
 
     def _on_progress(self, index: int, path: str, status: str, message: str) -> None:
         level = {"ok": "ok", "skip": "skip", "fail": "fail"}.get(status, "info")
@@ -404,17 +401,50 @@ class ASRPage(QWidget):
 
     def _on_count(self, ok: int, skip: int, fail: int, total: int, filename: str) -> None:
         done = ok + skip + fail
+        self._set_asr_progress(done, total)
         window = self.window()
         if window:
             window.setWindowTitle(f"BBDown - 转文字 {done}/{total}")
 
     def _on_finished(self, summary: str) -> None:
         self.log.log("info", f"--- {summary} ---")
+        self.start_btn.setEnabled(True)
         self.start_btn.setText("开始转文字")
         window = self.window()
         if window:
             window.setWindowTitle(f"BBDown - {summary}")
         self.worker = None
+
+    def _on_url_progress(self, index: int, url: str, status: str, message: str) -> None:
+        level = {"ok": "ok", "skip": "skip", "fail": "fail"}.get(status, "info")
+        prefix = {"ok": "OK", "skip": "SKIP", "fail": "FAIL"}.get(status, "INFO")
+        self.log.log(level, f"[{prefix}] {message}")
+
+    def _on_url_count(self, ok: int, skip: int, fail: int, total: int, filename: str) -> None:
+        done = ok + skip + fail
+        self._set_asr_progress(done, total)
+        window = self.window()
+        if window:
+            window.setWindowTitle(f"BBDown - 音频转文字 {done}/{total}")
+
+    def _set_asr_progress(self, done: int, total: int) -> None:
+        percent = int(done * 100 / total) if total else 0
+        self.progress_bar.setValue(percent)
+        self.progress_label.setText(f"进度 {done}/{total} | {percent}%")
+
+    def _on_url_finished(self, result: UrlASRBatchResult) -> None:
+        self.log.log("info", f"--- {result.summary} ---")
+        if result.failed_urls:
+            self.url_edit.setPlainText("\n".join(result.failed_urls))
+            self.log.log("warn", f"已把 {len(result.failed_urls)} 条失败链接留在输入框，可直接重试。")
+        else:
+            self.url_edit.clear()
+        self.start_btn.setEnabled(True)
+        self.start_btn.setText("开始转文字")
+        window = self.window()
+        if window:
+            window.setWindowTitle(f"BBDown - {result.summary}")
+        self.url_worker = None
 
     def dragEnterEvent(self, event) -> None:  # type: ignore[override]
         if event.mimeData().hasUrls():
@@ -433,4 +463,7 @@ class ASRPage(QWidget):
         self.add_files(files)
 
     def is_running(self) -> bool:
-        return bool(self.worker and self.worker.isRunning())
+        return bool(
+            (self.worker and self.worker.isRunning())
+            or (self.url_worker and self.url_worker.isRunning())
+        )

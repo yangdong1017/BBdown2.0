@@ -19,7 +19,7 @@ class MainWindow(FluentWindow):
         self.download_page = DownloadPage(self)
         self.asr_page = ASRPage(self)
         self.asr_page.request_download_dir.connect(self._use_download_dir)
-        self.addSubInterface(self.download_page, FIF.DOWNLOAD, "批量下载")
+        self.addSubInterface(self.download_page, FIF.DOWNLOAD, "B站批量下载")
         self.addSubInterface(self.asr_page, FIF.MICROPHONE, "批量转文字")
         self.navigationInterface.setExpandWidth(180)
 

@@ -11,8 +11,9 @@ class AppConfig:
     thread_count: int = 5
     asr_engine: str = "必剪"
     asr_format: str = "txt"
-    asr_concurrency: int = 2
+    asr_concurrency: int = 5
     asr_output_dir: str = ""
+    asr_mode: str = "抖音链接转文字"
 
 
 @dataclass(slots=True)

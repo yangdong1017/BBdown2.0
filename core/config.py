@@ -17,11 +17,14 @@ LOG_DIR = APP_ROOT / "bbdown_gui_logs"
 RUNTIME_DIR = APP_ROOT / "bbdown_runtime"
 TOOLS_DIR = APP_ROOT / "bbdown_tools"
 
-THREAD_OPTIONS = (1, 2, 3, 5)
+MIN_CONCURRENCY = 5
+THREAD_OPTIONS = (5, 8, 10)
 ASR_ENGINE_OPTIONS = ("必剪", "剪映", "快手")
 ASR_FORMAT_OPTIONS = ("txt", "srt", "ass")
-ASR_CONCURRENCY_OPTIONS = (1, 2, 3, 5)
+ASR_CONCURRENCY_OPTIONS = (5, 8, 10)
+ASR_MODE_OPTIONS = ("抖音链接转文字", "音视频转文字")
 DEFAULT_THREAD_COUNT = 5
+DEFAULT_ASR_CONCURRENCY = 5
 ENABLE_BBDOWN_DEBUG = False
 USE_ARIA2C_FOR_DOWNLOAD = True
 AUDIO_FILE_PATTERN = "<videoTitle>"
@@ -46,13 +49,11 @@ def _read_json(path: Path) -> dict:
 
 def load_app_config() -> AppConfig:
     data = _read_json(CONFIG_PATH)
-    thread_count = data.get("thread_count", DEFAULT_THREAD_COUNT)
-    try:
-        thread_count = int(thread_count)
-    except Exception:
-        thread_count = DEFAULT_THREAD_COUNT
-    if thread_count not in THREAD_OPTIONS:
-        thread_count = DEFAULT_THREAD_COUNT
+    thread_count = _normalize_concurrency(
+        data.get("thread_count", DEFAULT_THREAD_COUNT),
+        options=THREAD_OPTIONS,
+        default=DEFAULT_THREAD_COUNT,
+    )
 
     last_urls = data.get("last_urls") or data.get("last_url") or ""
     if not isinstance(last_urls, str):
@@ -70,17 +71,19 @@ def load_app_config() -> AppConfig:
     if asr_format not in ASR_FORMAT_OPTIONS:
         asr_format = "txt"
 
-    asr_concurrency = data.get("asr_concurrency") or 2
-    try:
-        asr_concurrency = int(asr_concurrency)
-    except Exception:
-        asr_concurrency = 2
-    if asr_concurrency not in ASR_CONCURRENCY_OPTIONS:
-        asr_concurrency = 2
+    asr_concurrency = _normalize_concurrency(
+        data.get("asr_concurrency", DEFAULT_ASR_CONCURRENCY),
+        options=ASR_CONCURRENCY_OPTIONS,
+        default=DEFAULT_ASR_CONCURRENCY,
+    )
 
     asr_output_dir = data.get("asr_output_dir") or ""
     if not isinstance(asr_output_dir, str):
         asr_output_dir = ""
+
+    asr_mode = data.get("asr_mode") or "抖音链接转文字"
+    if asr_mode not in ASR_MODE_OPTIONS:
+        asr_mode = "抖音链接转文字"
 
     return AppConfig(
         last_urls=last_urls,
@@ -90,6 +93,7 @@ def load_app_config() -> AppConfig:
         asr_format=asr_format,
         asr_concurrency=asr_concurrency,
         asr_output_dir=asr_output_dir,
+        asr_mode=asr_mode,
     )
 
 
@@ -102,5 +106,18 @@ def save_app_config(config: AppConfig) -> None:
         "asr_format": config.asr_format,
         "asr_concurrency": config.asr_concurrency,
         "asr_output_dir": config.asr_output_dir,
+        "asr_mode": config.asr_mode,
     }
     CONFIG_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _normalize_concurrency(value: object, *, options: tuple[int, ...], default: int) -> int:
+    try:
+        normalized = int(value)
+    except Exception:
+        return default
+    if normalized < MIN_CONCURRENCY:
+        return MIN_CONCURRENCY
+    if normalized not in options:
+        return default
+    return normalized

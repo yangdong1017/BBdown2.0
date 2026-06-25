@@ -134,20 +134,39 @@ class BcutASR(BaseASR):
 
     def result(self, task_id: Optional[str] = None):
         """查询转换结果"""
-        resp = requests.get(API_QUERY_RESULT, params={"model_id": 7, "task_id": task_id or self.task_id}, headers=self.headers)
-        resp.raise_for_status()
-        resp = resp.json()
-        return resp["data"]
+        resp = requests.get(API_QUERY_RESULT, params={"model_id": 8, "task_id": task_id or self.task_id}, headers=self.headers)
+        if resp.status_code == 412:
+            logging.info("识别结果暂未就绪，稍后重试")
+            return {"state": 0, "result": ""}
+        try:
+            resp.raise_for_status()
+        except requests.HTTPError as exc:
+            raise RuntimeError(f"必剪识别服务返回 HTTP {resp.status_code}，请稍后重试。") from exc
+
+        payload = resp.json()
+        if payload.get("code", 0) not in (0, "0"):
+            message = payload.get("message") or payload.get("msg") or payload.get("code")
+            raise RuntimeError(f"必剪识别服务返回错误：{message}")
+        return payload["data"]
 
     def _run(self):
         self.upload()
         self.create_task()
+        task_resp = None
         # 轮询检查任务状态
-        for _ in range(500):
+        for attempt in range(500):
             task_resp = self.result()
-            if task_resp["state"] == 4:
+            state = task_resp.get("state")
+            if state == 4:
                 break
-            time.sleep(1)
+            if state in (5, 6):
+                raise RuntimeError("必剪识别任务失败，请换一个 ASR 接口或稍后重试。")
+            time.sleep(min(1 + attempt // 30, 5))
+        else:
+            raise TimeoutError("必剪识别等待超时，请稍后重试或降低并发。")
+
+        if not task_resp or not task_resp.get("result"):
+            raise RuntimeError("必剪识别完成但没有返回文字结果，请换一个 ASR 接口重试。")
         logging.info(f"转换成功")
         return json.loads(task_resp["result"])
 

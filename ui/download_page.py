@@ -16,6 +16,7 @@ from qfluentwidgets import (
     ComboBox,
     MessageBox,
     PrimaryPushButton,
+    ProgressBar,
     PushButton,
     TextEdit,
     TitleLabel,
@@ -58,7 +59,7 @@ class DownloadPage(QWidget):
         root.setContentsMargins(20, 20, 20, 20)
         root.setSpacing(14)
 
-        root.addWidget(TitleLabel("批量下载", self))
+        root.addWidget(TitleLabel("B站批量下载", self))
         self.engine_label = CaptionLabel(self)
         self.login_state_label = CaptionLabel(self)
         self.engine_label.setVisible(False)
@@ -79,7 +80,7 @@ class DownloadPage(QWidget):
         content_layout.addWidget(BodyLabel("视频链接", content_card))
 
         self.url_edit = TextEdit(content_card)
-        self.url_edit.setPlaceholderText("在这里粘贴下载链接，一行一个 URL...")
+        self.url_edit.setPlaceholderText("在这里粘贴 B站 视频链接，一行一个 URL...")
         self.url_edit.setMinimumHeight(260)
         self.url_edit.setStyleSheet(TEXT_EDIT_STYLE)
         self.url_edit.textChanged.connect(self._update_count)
@@ -93,6 +94,15 @@ class DownloadPage(QWidget):
         count_row.addStretch(1)
         count_row.addWidget(self.clean_btn)
         content_layout.addLayout(count_row)
+
+        progress_row = QHBoxLayout()
+        self.progress_bar = ProgressBar(content_card)
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_label = CaptionLabel("进度 0/0", content_card)
+        progress_row.addWidget(self.progress_bar, 1)
+        progress_row.addWidget(self.progress_label)
+        content_layout.addLayout(progress_row)
 
         action_row = QHBoxLayout()
         self.start_btn = PrimaryPushButton("开始下载", content_card)
@@ -301,6 +311,7 @@ class DownloadPage(QWidget):
         self.failed_urls = []
         self.no_output_urls = []
         self._update_count()
+        self._on_download_progress(0, 0, 0)
 
     def _on_thread_changed(self, value: str) -> None:
         try:
@@ -314,6 +325,7 @@ class DownloadPage(QWidget):
     def _set_running_state(self, running: bool) -> None:
         self.start_btn.setEnabled(not running)
         self.stop_btn.setEnabled(running)
+        self.stop_btn.setText("停止任务")
         self.choose_dir_btn.setEnabled(not running)
         self.thread_combo.setEnabled(not running)
         self.clean_btn.setEnabled(not running)
@@ -339,6 +351,7 @@ class DownloadPage(QWidget):
         self.failed_urls = []
         self.no_output_urls = []
         self._new_session_log("download_batch")
+        self._on_download_progress(0, len(urls), 0)
         self._append_log("info", f"准备开始批量下载，线程设置 {self.config.thread_count}。")
 
         self.download_worker = DownloadWorkerThread(
@@ -351,12 +364,21 @@ class DownloadPage(QWidget):
         )
         self.download_worker.log.connect(self._append_log)
         self.download_worker.status.connect(self._set_status)
+        self.download_worker.progress.connect(self._on_download_progress)
         self.download_worker.finished_all.connect(self._on_download_finished)
         self.download_worker.start()
         self._set_running_state(True)
 
     def _set_status(self, message: str) -> None:
         self.status_label.setText(message)
+
+    def _on_download_progress(self, completed: int, total: int, active: int) -> None:
+        percent = int(completed * 100 / total) if total else 0
+        self.progress_bar.setValue(percent)
+        self.progress_label.setText(f"进度 {completed}/{total} | {percent}% | 进行中 {active}")
+        window = self.window()
+        if window and total:
+            window.setWindowTitle(f"BBDown - B站下载 {completed}/{total}")
 
     def _on_download_finished(self, result: object) -> None:
         assert isinstance(result, DownloadBatchResult)
@@ -492,8 +514,10 @@ class DownloadPage(QWidget):
             self.login_worker.stop()
             stopped_any = True
         if stopped_any:
-            self._append_log("warn", "正在停止当前任务...")
-            self._set_status("正在停止任务...")
+            self.stop_btn.setEnabled(False)
+            self.stop_btn.setText("正在停止")
+            self._append_log("warn", "正在停止：不会再开始新任务，正在结束当前任务。")
+            self._set_status("正在停止任务，不再开始新任务...")
 
     def is_running(self) -> bool:
         return bool((self.download_worker and self.download_worker.isRunning()) or (self.login_worker and self.login_worker.isRunning()))

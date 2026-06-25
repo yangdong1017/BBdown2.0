@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import shlex
 
-from .config import AUDIO_FILE_PATTERN, ENABLE_BBDOWN_DEBUG, USE_ARIA2C_FOR_DOWNLOAD
+from .config import AUDIO_FILE_PATTERN, ENABLE_BBDOWN_DEBUG, MIN_CONCURRENCY, USE_ARIA2C_FOR_DOWNLOAD
 from .models import Toolchain
 
 
@@ -19,6 +19,7 @@ def looks_like_video_input(line: str) -> bool:
 
 
 def build_aria2_args(thread_count: int) -> str:
+    thread_count = max(MIN_CONCURRENCY, int(thread_count))
     return f"-x{thread_count} -s{thread_count} -j{thread_count} -k1M"
 
 
