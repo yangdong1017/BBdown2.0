@@ -27,6 +27,7 @@ from core.config import (
     DOUBAO_ENGINE_NAME,
     DOUBAO_ASR_CONCURRENCY_OPTIONS,
     LOCAL_FILE_ASR_ENGINE_OPTIONS,
+    load_doubao_api_key,
     load_app_config,
     save_app_config,
 )
@@ -34,7 +35,7 @@ from core.asr_file_worker import ASRWorkerThread
 from core.media import MEDIA_EXTENSIONS, is_media
 from core.toolchain import resolve_toolchain
 from core.url_asr_worker import UrlASRBatchResult, UrlASRWorkerThread, default_url_output_dir
-from core.url_audio import extract_audio_urls
+from core.url_audio import extract_audio_urls, extract_douyin_share_urls
 from .widgets import ConsoleLog, TEXT_EDIT_STYLE
 
 
@@ -46,7 +47,7 @@ STATUS_COLORS = {
     "未处理": "#a8a8a8",
 }
 
-DOUYIN_ASR_MODE = "抖音链接转文字"
+DOUYIN_ASR_MODE = "抖音音频链接转文字"
 
 
 class ASRPage(QWidget):
@@ -124,7 +125,7 @@ class ASRPage(QWidget):
         layout.addLayout(file_row)
 
         self.url_edit = QPlainTextEdit(self)
-        self.url_edit.setPlaceholderText("粘贴抖音音频链接，一行一个；也可以直接粘贴整段文本。")
+        self.url_edit.setPlaceholderText("粘贴抖音 mp3/wav 音频直链，一行一个；也可以粘贴包含音频直链的整段文本。")
         self.url_edit.setMinimumHeight(76)
         self.url_edit.setMaximumHeight(110)
         self.url_edit.setStyleSheet(TEXT_EDIT_STYLE)
@@ -345,9 +346,20 @@ class ASRPage(QWidget):
             return
 
         if self._is_douyin_mode():
+            if self.engine_combo.currentText() == DOUBAO_ENGINE_NAME and not load_doubao_api_key():
+                MessageBox("提示", "请先到左下角设置填写豆包 API Key。", self.window()).exec()
+                return
             url_pending = extract_audio_urls(self.url_edit.toPlainText())
             if not url_pending:
-                MessageBox("提示", "没有检测到可转写的抖音音频链接。", self.window()).exec()
+                share_urls = extract_douyin_share_urls(self.url_edit.toPlainText())
+                if share_urls:
+                    MessageBox(
+                        "提示",
+                        "检测到的是抖音视频分享链接，不是 mp3/wav 音频直链，当前不能直接转写。请粘贴抖音音频直链后再开始。",
+                        self.window(),
+                    ).exec()
+                else:
+                    MessageBox("提示", "没有检测到可转写的抖音音频直链。", self.window()).exec()
                 return
             self._start_url_asr(url_pending)
             return

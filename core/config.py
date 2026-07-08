@@ -13,10 +13,12 @@ APP_ROOT = Path(sys.executable).resolve().parent if IS_FROZEN else Path(__file__
 RESOURCE_ROOT = Path(getattr(sys, "_MEIPASS", APP_ROOT))
 
 CONFIG_PATH = APP_ROOT / "bbdown_gui_config.json"
+LICENSE_PATH = APP_ROOT / "bbdown_license.json"
 LOG_DIR = APP_ROOT / "bbdown_gui_logs"
 RUNTIME_DIR = APP_ROOT / "bbdown_runtime"
 TOOLS_DIR = APP_ROOT / "bbdown_tools"
 
+APP_VERSION = "3.1"
 MIN_CONCURRENCY = 5
 THREAD_OPTIONS = (5, 8, 10)
 BCUT_ENGINE_NAME = "必剪"
@@ -27,14 +29,22 @@ ASR_FORMAT_OPTIONS = ("txt", "srt", "ass")
 ASR_CONCURRENCY_OPTIONS = (5, 8, 10)
 DOUBAO_ASR_CONCURRENCY_OPTIONS = (5, 8, 10, 30, 50)
 ALL_ASR_CONCURRENCY_OPTIONS = tuple(sorted(set(ASR_CONCURRENCY_OPTIONS + DOUBAO_ASR_CONCURRENCY_OPTIONS)))
-ASR_MODE_OPTIONS = ("抖音链接转文字", "音视频转文字")
+ASR_MODE_OPTIONS = ("抖音音频链接转文字", "音视频转文字")
 DEFAULT_THREAD_COUNT = 5
 DEFAULT_ASR_CONCURRENCY = 5
 ENABLE_BBDOWN_DEBUG = False
 USE_ARIA2C_FOR_DOWNLOAD = True
 AUDIO_FILE_PATTERN = "<videoTitle>"
 MAX_LOG_LINE_LENGTH = 420
-WINDOW_TITLE = "BBDown"
+WINDOW_TITLE = f"BBDown {APP_VERSION}"
+
+# Empty LICENSE_API_URL means the app uses core/license_private.py to connect Feishu Base directly.
+# Direct mode is simple to package, but the bundled EXE may expose Feishu credentials if reversed.
+DEFAULT_LICENSE_API_URL = ""
+LICENSE_API_URL = os.getenv("BBDOWN_LICENSE_API_URL", DEFAULT_LICENSE_API_URL).strip().rstrip("/")
+LICENSE_REQUIRED = os.getenv("BBDOWN_LICENSE_REQUIRED", "1").strip().lower() in {"1", "true", "yes", "on"}
+LICENSE_VERIFY_INTERVAL_HOURS = 24
+LICENSE_OFFLINE_GRACE_HOURS = 72
 
 
 def ensure_dirs() -> None:
@@ -86,9 +96,15 @@ def load_app_config() -> AppConfig:
     if not isinstance(asr_output_dir, str):
         asr_output_dir = ""
 
-    asr_mode = data.get("asr_mode") or "抖音链接转文字"
+    asr_mode = data.get("asr_mode") or "抖音音频链接转文字"
+    if asr_mode == "抖音链接转文字":
+        asr_mode = "抖音音频链接转文字"
     if asr_mode not in ASR_MODE_OPTIONS:
-        asr_mode = "抖音链接转文字"
+        asr_mode = "抖音音频链接转文字"
+
+    doubao_api_key = data.get("doubao_api_key") or ""
+    if not isinstance(doubao_api_key, str):
+        doubao_api_key = ""
 
     return AppConfig(
         last_urls=last_urls,
@@ -99,6 +115,7 @@ def load_app_config() -> AppConfig:
         asr_concurrency=asr_concurrency,
         asr_output_dir=asr_output_dir,
         asr_mode=asr_mode,
+        doubao_api_key=doubao_api_key.strip(),
     )
 
 
@@ -112,8 +129,21 @@ def save_app_config(config: AppConfig) -> None:
         "asr_concurrency": config.asr_concurrency,
         "asr_output_dir": config.asr_output_dir,
         "asr_mode": config.asr_mode,
+        "doubao_api_key": config.doubao_api_key.strip(),
     }
     CONFIG_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def load_doubao_api_key() -> str:
+    data = _read_json(CONFIG_PATH)
+    api_key = data.get("doubao_api_key") or ""
+    return api_key.strip() if isinstance(api_key, str) else ""
+
+
+def save_doubao_api_key(api_key: str) -> None:
+    config = load_app_config()
+    config.doubao_api_key = api_key.strip()
+    save_app_config(config)
 
 
 def _normalize_concurrency(value: object, *, options: tuple[int, ...], default: int) -> int:

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import time
 import uuid
 from collections.abc import Callable
@@ -8,15 +7,17 @@ from typing import Any
 
 import requests
 
+from core.config import load_doubao_api_key
 from core.url_audio import infer_doubao_direct_format
 
 
 SUBMIT_URL = "https://openspeech.bytedance.com/api/v3/auc/bigmodel/submit"
 QUERY_URL = "https://openspeech.bytedance.com/api/v3/auc/bigmodel/query"
 RESOURCE_ID = "volc.seedasr.auc"
+TEST_AUDIO_URL = "https://lf26-music-east.douyinstatic.com/obj/ies-music-hj/7546439142222302011.mp3"
 
-# 如需硬编码 API Key，填在这里；也可以用环境变量 BBDOWN_DOUBAO_API_KEY 覆盖。
-DOUBAO_API_KEY = "a67cf139-87c1-4424-a2d6-08dc91d768d3"
+# 3.1 起不再内置豆包 API Key。正式设置页落地后从本机配置读取。
+DOUBAO_API_KEY = ""
 
 SUCCESS_CODE = "20000000"
 PROCESSING_CODES = {"20000001", "20000002"}
@@ -67,6 +68,31 @@ def transcribe_doubao_url(
 
     detail = f"，链接类型 {content_type}" if content_type else ""
     raise TimeoutError(f"豆包识别等待超时{detail}。")
+
+
+def test_doubao_api_key(api_key: str, *, timeout_seconds: int = 90) -> bool:
+    api_key = api_key.strip()
+    if not api_key:
+        return False
+
+    try:
+        audio_format, _ = infer_doubao_direct_format(TEST_AUDIO_URL)
+        request_id = str(uuid.uuid4())
+        log_id = _submit_task(api_key, request_id, TEST_AUDIO_URL, audio_format)
+        started = time.time()
+
+        while time.time() - started < timeout_seconds:
+            data, status_code, message = _query_task(api_key, request_id, log_id)
+            if status_code == SUCCESS_CODE:
+                return True
+            if status_code in PROCESSING_CODES:
+                time.sleep(2.0)
+                continue
+            return False
+    except Exception:
+        return False
+
+    return False
 
 
 def _submit_task(api_key: str, request_id: str, url: str, audio_format: str) -> str:
@@ -162,9 +188,9 @@ def _extract_text(data: dict[str, Any]) -> str:
 
 
 def _get_api_key() -> str:
-    api_key = os.environ.get("BBDOWN_DOUBAO_API_KEY", "").strip() or DOUBAO_API_KEY.strip()
+    api_key = load_doubao_api_key() or DOUBAO_API_KEY.strip()
     if not api_key:
-        raise DoubaoASRError("未配置豆包 API Key，请在 core/doubao_asr.py 填写 DOUBAO_API_KEY。")
+        raise DoubaoASRError("未配置豆包 API Key，请先到设置页填写。")
     return api_key
 
 

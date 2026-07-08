@@ -34,7 +34,14 @@ hiddenimports += [
     "bk_asr.BaseASR",
     "bk_asr.BcutASR",
     "core.doubao_asr",
+    "core.feishu_license_client",
+    "core.license_service",
+    "core.machine_id",
+    "ui.license_dialog",
+    "ui.settings_page",
 ]
+if os.path.isfile(os.path.join(PROJECT_ROOT, "core", "license_private.py")):
+    hiddenimports.append("core.license_private")
 
 a = Analysis(
     [APP_SCRIPT],

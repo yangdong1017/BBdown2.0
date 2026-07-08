@@ -1,6 +1,6 @@
-# BBDown2.1
+﻿# BBDown3.1
 
-BBDown2.1 是一个 Windows 桌面工具，用来降低批量处理视频、音频素材的操作成本。
+BBDown3.1 是一个 Windows 桌面工具，用来降低批量处理视频、音频素材的操作成本。
 
 它支持 B站链接批量下载音频，也支持将抖音音频链接、本地音频、本地视频批量转写为文字，适合整理口播文案、字幕文本和音频内容。
 
@@ -17,11 +17,14 @@ BBDown2.1 是一个 Windows 桌面工具，用来降低批量处理视频、音�
 
 支持两种模式：
 
-1. 抖音链接转文字  
+1. 抖音音频链接转文字
    粘贴抖音音频直链，或粘贴包含音频直链的整段文本，软件会自动提取可转写链接。
+   抖音视频分享短链不是音频直链，当前不能直接转写。
 
 2. 音视频转文字  
    选择本地音频、视频文件，或直接选择文件夹批量转写。
+
+豆包 API Key 不再内置。需要使用豆包时，在软件左下角“设置”里填写自己的火山引擎 API Key。
 
 支持导出格式：
 
@@ -36,7 +39,7 @@ BBDown2.1 是一个 Windows 桌面工具，用来降低批量处理视频、音�
 前往 Releases 下载：
 
 ```text
-BBDown-2.1.exe
+BBDown-3.1.exe
 ```
 
 双击安装包，按照提示安装即可。
@@ -46,7 +49,7 @@ BBDown-2.1.exe
 前往 Releases 下载：
 
 ```text
-BBDown-2.1.zip
+BBDown-3.1.zip
 ```
 
 使用方法：
@@ -79,17 +82,23 @@ run_source.bat
 ## 项目结构
 
 ```text
-BBDown2.1/
+BBDown3.1/
 ├─ app.py
 ├─ core/                         # 下载、配置、任务调度、转写服务
 │  ├─ asr_service.py              # ASR 接口封装
 │  ├─ asr_task.py                 # 转写任务处理
 │  ├─ asr_file_worker.py          # 本地文件转写后台任务
+│  ├─ feishu_license_client.py    # 飞书 Base 卡密直连客户端
+│  ├─ license_service.py          # 卡密激活和校验
+│  ├─ license_private.example.py  # 本地密钥配置模板
+│  ├─ machine_id.py               # 本机设备ID生成
 │  ├─ url_asr_worker.py           # 音频链接转写后台任务
 │  ├─ url_audio.py                # 音频链接识别和读取
 │  ├─ task_scheduler.py           # 并发任务调度
 │  └─ workers.py                  # B站下载和登录后台任务
 ├─ ui/                            # 图形界面
+│  ├─ license_dialog.py           # 卡密激活窗口
+│  ├─ settings_page.py            # 豆包 API Key 设置页
 ├─ bk_asr/                        # ASR 实现
 ├─ tools/                         # BBDown、FFmpeg、aria2c
 ├─ requirements.txt
@@ -123,6 +132,37 @@ ISCC.exe installer.iss
 installer_output\
 ```
 
+## 卡密维护
+
+3.1 已接入卡密激活逻辑，默认开启强制校验。
+
+本版本采用本地 EXE 直连飞书 Base 的方式。先复制模板：
+
+```powershell
+copy .\core\license_private.example.py .\core\license_private.py
+```
+
+然后在 `core\license_private.py` 填入：
+
+```text
+FEISHU_APP_ID
+FEISHU_APP_SECRET
+BASE_APP_TOKEN
+CARD_TABLE_ID
+LOG_TABLE_ID
+```
+
+注意：`core\license_private.py` 已加入 `.gitignore`，不要提交到 GitHub。
+
+强制校验开关在：
+
+```text
+core/config.py
+LICENSE_REQUIRED = True
+```
+
+如果打包 EXE，`core\license_private.py` 会一起打进安装包。这个方式上手简单，但安装包被反编译时可能暴露飞书密钥。
+
 ## 发布维护流程
 
 每次发布新版本时，先本地打包，再创建 GitHub Release。
@@ -138,7 +178,7 @@ installer.iss
 
 ```powershell
 .\.venv\Scripts\python.exe -m PyInstaller build_bbdown_launcher.spec --noconfirm --clean
-Compress-Archive -Path .\dist\BBDown -DestinationPath .\BBDown-2.1.zip -Force
+Compress-Archive -Path .\dist\BBDown -DestinationPath .\BBDown-3.1.zip -Force
 ```
 
 3. 生成安装包：
@@ -156,15 +196,15 @@ ISCC.exe installer.iss
 生成文件：
 
 ```text
-installer_output\BBDown-Setup-2.1.exe
+installer_output\BBDown-Setup-3.1.exe
 ```
 
 4. 先测试本地产物：
 
 ```text
 dist\BBDown\BBDown.exe
-BBDown-2.1.zip
-installer_output\BBDown-Setup-2.1.exe
+BBDown-3.1.zip
+installer_output\BBDown-Setup-3.1.exe
 ```
 
 5. 测试无误后，再创建 GitHub Release 并上传安装包和解压包。

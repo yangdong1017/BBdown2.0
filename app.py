@@ -4,11 +4,13 @@ import os
 import sys
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QApplication
+from PyQt5.QtWidgets import QApplication, QDialog
 from qfluentwidgets import Theme, setTheme, setThemeColor
 
-from core.config import APP_ROOT, RESOURCE_ROOT, ensure_dirs
+from core.config import APP_ROOT, LICENSE_REQUIRED, RESOURCE_ROOT, ensure_dirs
+from core.license_service import LicenseService
 from core.toolchain import resolve_toolchain
+from ui.license_dialog import LicenseDialog
 from ui.main_window import MainWindow
 
 
@@ -53,6 +55,18 @@ def main(argv: list[str] | None = None) -> int:
     setTheme(Theme.DARK)
     setThemeColor("#4cc2ff")
     trace("main:theme_set")
+
+    if LICENSE_REQUIRED:
+        trace("main:license_check_start")
+        license_service = LicenseService()
+        license_result = license_service.verify(force=True)
+        if not license_result.ok:
+            dialog = LicenseDialog(license_service)
+            if dialog.exec() != QDialog.Accepted:
+                trace("main:license_rejected")
+                return 0
+        trace("main:license_ready")
+
     window = MainWindow()
     trace("main:window_created")
     window.show()

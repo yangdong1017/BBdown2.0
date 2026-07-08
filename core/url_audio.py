@@ -24,6 +24,18 @@ AUDIO_HOST_HINTS = (
     "douyinvod.com",
     "bytevod.com",
 )
+DOUYIN_SHARE_HOST_HINTS = (
+    "v.douyin.com",
+    "www.douyin.com",
+    "m.douyin.com",
+    "iesdouyin.com",
+)
+DOUYIN_SHARE_PATH_HINTS = (
+    "/video/",
+    "/note/",
+    "/share/video/",
+    "/share/note/",
+)
 TRAILING_PUNCTUATION = " \t\r\n\"'<>)]}，。；;、"
 DEFAULT_HEADERS = {
     "User-Agent": (
@@ -58,6 +70,25 @@ def extract_audio_urls(text: str) -> list[str]:
     return urls
 
 
+def extract_douyin_share_urls(text: str) -> list[str]:
+    """Extract Douyin video/note share URLs that are not direct audio URLs."""
+    if not text:
+        return []
+
+    urls: list[str] = []
+    seen: set[str] = set()
+    for match in URL_RE.finditer(text):
+        url = match.group(0).rstrip(TRAILING_PUNCTUATION)
+        if _looks_like_audio_url(url) or not _looks_like_douyin_share_url(url):
+            continue
+        key = url.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        urls.append(url)
+    return urls
+
+
 def _looks_like_audio_url(url: str) -> bool:
     parsed = urlparse(url)
     path = unquote(parsed.path).lower()
@@ -67,6 +98,17 @@ def _looks_like_audio_url(url: str) -> bool:
     if any(host_hint in host for host_hint in AUDIO_HOST_HINTS):
         return any(path_hint in path for path_hint in AUDIO_PATH_HINTS)
     return False
+
+
+def _looks_like_douyin_share_url(url: str) -> bool:
+    parsed = urlparse(url)
+    host = parsed.netloc.lower()
+    path = unquote(parsed.path).lower()
+    if not any(host_hint in host for host_hint in DOUYIN_SHARE_HOST_HINTS):
+        return False
+    if "v.douyin.com" in host:
+        return True
+    return any(path_hint in path for path_hint in DOUYIN_SHARE_PATH_HINTS)
 
 
 def audio_name_from_url(url: str, index: int) -> str:

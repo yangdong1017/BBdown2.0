@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from qfluentwidgets import FluentIcon as FIF, FluentWindow, MessageBox
+from qfluentwidgets import FluentIcon as FIF, FluentWindow, MessageBox, NavigationItemPosition
 
 from core.config import WINDOW_TITLE
 from core.media import is_media
 from .asr_page import ASRPage
 from .download_page import DownloadPage
+from .settings_page import SettingsPage
 
 
 class MainWindow(FluentWindow):
@@ -18,9 +19,11 @@ class MainWindow(FluentWindow):
         self.setMinimumSize(1060, 760)
         self.download_page = DownloadPage(self)
         self.asr_page = ASRPage(self)
+        self.settings_page = SettingsPage(self)
         self.asr_page.request_download_dir.connect(self._use_download_dir)
         self.addSubInterface(self.download_page, FIF.DOWNLOAD, "B站批量下载")
         self.addSubInterface(self.asr_page, FIF.MICROPHONE, "批量转文字")
+        self.addSubInterface(self.settings_page, FIF.SETTING, "设置", position=NavigationItemPosition.BOTTOM)
         self.navigationInterface.setExpandWidth(180)
 
     def _use_download_dir(self) -> None:
