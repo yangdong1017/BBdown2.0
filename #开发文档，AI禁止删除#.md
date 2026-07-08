@@ -65,7 +65,7 @@ Release 文件名
 
 ```text
 BBDown 3.1
-BBDown-Setup-3.1.exe
+BBDown-3.1.exe
 BBDown-3.1.zip
 v3.1
 ```
@@ -89,7 +89,7 @@ Compress-Archive -Path .\dist\BBDown -DestinationPath .\release_assets\v3.1\BBDo
 
 ```powershell
 & "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" .\installer.iss
-Copy-Item .\installer_output\BBDown-Setup-3.1.exe .\release_assets\v3.1\BBDown-Setup-3.1.exe -Force
+Copy-Item .\installer_output\BBDown-3.1.exe .\release_assets\v3.1\BBDown-3.1.exe -Force
 ```
 
 ## GitHub Release 习惯
@@ -97,7 +97,7 @@ Copy-Item .\installer_output\BBDown-Setup-3.1.exe .\release_assets\v3.1\BBDown-S
 Release 上传两个文件：
 
 ```text
-BBDown-Setup-3.1.exe
+BBDown-3.1.exe
 BBDown-3.1.zip
 ```
 

@@ -196,7 +196,7 @@ ISCC.exe installer.iss
 生成文件：
 
 ```text
-installer_output\BBDown-Setup-3.1.exe
+installer_output\BBDown-3.1.exe
 ```
 
 4. 先测试本地产物：
@@ -204,7 +204,7 @@ installer_output\BBDown-Setup-3.1.exe
 ```text
 dist\BBDown\BBDown.exe
 BBDown-3.1.zip
-installer_output\BBDown-Setup-3.1.exe
+installer_output\BBDown-3.1.exe
 ```
 
 5. 测试无误后，再创建 GitHub Release 并上传安装包和解压包。
