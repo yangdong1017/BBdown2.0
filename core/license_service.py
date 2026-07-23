@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -15,6 +14,7 @@ from core.config import (
     LICENSE_PATH,
     LICENSE_VERIFY_INTERVAL_HOURS,
 )
+from core.config_store import atomic_write_json, read_json
 from core.feishu_license_client import FeishuLicenseConfigError, build_direct_feishu_client
 from core.machine_id import get_machine_id
 
@@ -66,14 +66,7 @@ class LicenseService:
         return self._request("verify", card_key=card_key, existing_cache=cache)
 
     def load_cache(self) -> dict[str, Any]:
-        if not self.cache_path.exists():
-            return {}
-        try:
-            data = json.loads(self.cache_path.read_text(encoding="utf-8"))
-        except Exception:
-            return {}
-        if not isinstance(data, dict):
-            return {}
+        data = read_json(self.cache_path)
         if data.get("machine_id") != self.machine_id:
             return {}
         return data
@@ -196,7 +189,7 @@ class LicenseService:
         }
 
     def _save_cache(self, data: dict[str, Any]) -> None:
-        self.cache_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        atomic_write_json(self.cache_path, data)
 
     def _offline_or_fail(self, cache: dict[str, Any] | None, message: str) -> LicenseResult:
         if not cache:

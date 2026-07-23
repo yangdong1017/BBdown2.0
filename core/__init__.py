@@ -18,7 +18,7 @@ from .config import (
     ensure_dirs,
     load_app_config,
     load_doubao_api_key,
-    save_app_config,
+    update_app_config,
     save_doubao_api_key,
 )
 from .models import AppConfig, DownloadBatchResult, LoginResult, Toolchain

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import time
+from collections.abc import Callable
 from pathlib import Path
 
 
@@ -17,7 +19,13 @@ def is_media(path: str | Path) -> bool:
     return Path(path).suffix.lower() in MEDIA_EXTENSIONS
 
 
-def convert_to_mp3(input_file: str | Path, output_file: str | Path, ffmpeg_path: str | Path | None) -> bool:
+def convert_to_mp3(
+    input_file: str | Path,
+    output_file: str | Path,
+    ffmpeg_path: str | Path | None,
+    *,
+    stopped: Callable[[], bool] | None = None,
+) -> bool:
     if ffmpeg_path is None:
         return False
 
@@ -37,15 +45,22 @@ def convert_to_mp3(input_file: str | Path, output_file: str | Path, ffmpeg_path:
         str(output),
     ]
     kwargs: dict[str, object] = {
-        "capture_output": True,
-        "encoding": "utf-8",
-        "errors": "replace",
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
     }
     if sys.platform == "win32":
         kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
 
     try:
-        result = subprocess.run(command, **kwargs)
+        process = subprocess.Popen(command, **kwargs)
     except (FileNotFoundError, OSError):
         return False
-    return result.returncode == 0 and output.is_file() and output.stat().st_size > 0
+
+    while process.poll() is None:
+        if stopped and stopped():
+            process.kill()
+            process.wait()
+            output.unlink(missing_ok=True)
+            return False
+        time.sleep(0.1)
+    return process.returncode == 0 and output.is_file() and output.stat().st_size > 0

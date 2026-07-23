@@ -15,6 +15,7 @@ def run_limited_tasks(
     max_workers: int,
     submit_one: Callable[[int, T], R],
     should_stop: Callable[[], bool],
+    on_error: Callable[[int, T, Exception], R] | None = None,
     start_index: int = 0,
 ) -> Iterator[R]:
     worker_count = max(1, int(max_workers))
@@ -40,7 +41,13 @@ def run_limited_tasks(
         while running:
             done, _ = wait(running, return_when=FIRST_COMPLETED)
             for future in done:
-                running.pop(future)
-                yield future.result()
+                index, item = running.pop(future)
+                try:
+                    result = future.result()
+                except Exception as exc:
+                    if on_error is None:
+                        raise
+                    result = on_error(index, item, exc)
+                yield result
                 if not should_stop():
                     submit_next()

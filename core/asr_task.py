@@ -27,10 +27,11 @@ def write_transcript(
     output_path: Path,
     engine_name: str,
     export_format: str,
+    *,
+    stopped: Callable[[], bool],
 ) -> str:
-    text = transcribe_audio(audio_input, engine_name, export_format, use_cache=True)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(text, encoding="utf-8")
+    text = transcribe_audio(audio_input, engine_name, export_format, use_cache=True, stopped=stopped)
+    _write_text_atomic(output_path, text, stopped)
     return str(output_path)
 
 
@@ -44,16 +45,14 @@ def write_url_transcript(
 ) -> str:
     if engine_name == DOUBAO_ENGINE_NAME:
         text = transcribe_doubao_url(url, export_format, stopped=stopped)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(text, encoding="utf-8")
+        _write_text_atomic(output_path, text, stopped)
         return str(output_path)
 
-    audio_bytes, _ = fetch_audio_bytes(url)
+    audio_bytes, _ = fetch_audio_bytes(url, stopped=stopped)
     if stopped():
         raise RuntimeError("已停止")
-    text = transcribe_audio(audio_bytes, engine_name, export_format, use_cache=True)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(text, encoding="utf-8")
+    text = transcribe_audio(audio_bytes, engine_name, export_format, use_cache=True, stopped=stopped)
+    _write_text_atomic(output_path, text, stopped)
     return str(output_path)
 
 
@@ -63,7 +62,7 @@ def process_file_asr_task(
     path: str,
     engine_name: str,
     export_format: str,
-    out_dir: str,
+    output_path: Path,
     ffmpeg_path: str | None,
     stopped: Callable[[], bool],
 ) -> ASRTaskResult:
@@ -71,8 +70,7 @@ def process_file_asr_task(
         return ASRTaskResult(index, path, "stopped", "已停止")
 
     source = Path(path)
-    target_dir = Path(out_dir) if out_dir else source.parent
-    out_path = target_dir / f"{source.stem}.{export_format.lower()}"
+    out_path = output_path
 
     if out_path.exists() and out_path.stat().st_size > 0:
         return ASRTaskResult(index, path, "skip", f"{source.name} -> 已存在", str(out_path))
@@ -82,15 +80,23 @@ def process_file_asr_task(
     if not is_audio(source):
         fd, temp_audio = tempfile.mkstemp(suffix=".mp3", prefix=f"asr_{source.stem[:40]}_")
         os.close(fd)
-        if not convert_to_mp3(source, temp_audio, ffmpeg_path):
+        if not convert_to_mp3(source, temp_audio, ffmpeg_path, stopped=stopped):
             _remove_temp_audio(temp_audio)
+            if stopped():
+                return ASRTaskResult(index, path, "stopped", "已停止")
             return ASRTaskResult(index, path, "fail", f"{source.name}: ffmpeg 转音频失败")
         audio_path = Path(temp_audio)
 
     try:
         if stopped():
             return ASRTaskResult(index, path, "stopped", "已停止")
-        output_path = write_transcript(audio_path, out_path, engine_name, export_format)
+        output_path = write_transcript(
+            audio_path,
+            out_path,
+            engine_name,
+            export_format,
+            stopped=stopped,
+        )
         return ASRTaskResult(index, path, "ok", f"{source.name} -> {out_path.name}", output_path)
     except Exception as exc:
         return ASRTaskResult(index, path, "fail", f"{source.name}: {format_task_error(exc)}")
@@ -105,14 +111,14 @@ def process_url_asr_task(
     url: str,
     engine_name: str,
     export_format: str,
-    out_dir: Path,
+    output_path: Path,
     stopped: Callable[[], bool],
 ) -> ASRTaskResult:
     if stopped():
         return ASRTaskResult(index, url, "stopped", "已停止")
 
     stem = audio_name_from_url(url, index)
-    out_path = out_dir / f"{stem}.{export_format.lower()}"
+    out_path = output_path
     if out_path.exists() and out_path.stat().st_size > 0:
         return ASRTaskResult(index, url, "skip", f"{out_path.name} 已存在", str(out_path))
 
@@ -137,3 +143,27 @@ def _remove_temp_audio(path: str) -> None:
         os.remove(path)
     except OSError:
         pass
+
+
+def _write_text_atomic(output_path: Path, text: str, stopped: Callable[[], bool]) -> None:
+    if stopped():
+        raise RuntimeError("已停止")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_path = tempfile.mkstemp(
+        prefix=f".{output_path.name}.",
+        suffix=".tmp",
+        dir=output_path.parent,
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if stopped():
+            raise RuntimeError("已停止")
+        os.replace(temp_path, output_path)
+    finally:
+        try:
+            os.remove(temp_path)
+        except OSError:
+            pass

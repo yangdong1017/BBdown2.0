@@ -7,8 +7,10 @@ from pathlib import Path
 
 from PyQt5.QtCore import QThread, pyqtSignal
 
+from core.asr_service import format_task_error
 from core.asr_task import ASRTaskResult, process_url_asr_task
 from core.config import MIN_CONCURRENCY
+from core.output_paths import OutputPathAllocator
 from core.task_scheduler import run_limited_tasks
 from core.url_audio import audio_name_from_url
 
@@ -50,6 +52,14 @@ class UrlASRWorkerThread(QThread):
         self.concurrency = max(MIN_CONCURRENCY, int(concurrency))
         self.out_dir = Path(out_dir) if out_dir else default_url_output_dir()
         self.stop_flag = threading.Event()
+        allocator = OutputPathAllocator()
+        self.output_paths = [
+            allocator.reserve(
+                self.out_dir / f"{audio_name_from_url(url, index)}.{self.export_format}",
+                allow_existing=True,
+            )
+            for index, url in enumerate(self.urls)
+        ]
 
     def stop(self) -> None:
         self.stop_flag.set()
@@ -60,11 +70,30 @@ class UrlASRWorkerThread(QThread):
             url=url,
             engine_name=self.engine_name,
             export_format=self.export_format,
-            out_dir=self.out_dir,
+            output_path=self.output_paths[index],
             stopped=self.stop_flag.is_set,
         )
 
+    @staticmethod
+    def _task_error(index: int, url: str, exc: Exception) -> ASRTaskResult:
+        name = audio_name_from_url(url, index)
+        return ASRTaskResult(index, url, "fail", f"{name}: {format_task_error(exc)}")
+
     def run(self) -> None:
+        try:
+            result = self._run_batch()
+        except Exception as exc:
+            result = UrlASRBatchResult(
+                summary=f"任务异常: {format_task_error(exc)}",
+                output_dir=str(self.out_dir),
+                stopped=self.stop_flag.is_set(),
+                failed_urls=list(self.urls),
+                fail=len(self.urls),
+                total=len(self.urls),
+            )
+        self.finished_all.emit(result)
+
+    def _run_batch(self) -> UrlASRBatchResult:
         total = len(self.urls)
         ok = skip = fail = 0
         failed_urls: list[str] = []
@@ -76,6 +105,7 @@ class UrlASRWorkerThread(QThread):
             max_workers=min(self.concurrency, max(total, 1)),
             submit_one=self._process_one,
             should_stop=self.stop_flag.is_set,
+            on_error=self._task_error,
         ):
             processed_indices.add(result.index)
             name = audio_name_from_url(result.source, result.index)
@@ -100,15 +130,13 @@ class UrlASRWorkerThread(QThread):
         stopped = self.stop_flag.is_set()
         prefix = "已停止" if stopped else "完成"
         summary = f"{prefix}: 成功 {ok} 跳过 {skip} 失败 {fail} | 耗时 {minutes:02d}:{seconds:02d}"
-        self.finished_all.emit(
-            UrlASRBatchResult(
-                summary=summary,
-                output_dir=str(self.out_dir),
-                stopped=stopped,
-                failed_urls=failed_urls,
-                ok=ok,
-                skip=skip,
-                fail=fail,
-                total=total,
-            )
+        return UrlASRBatchResult(
+            summary=summary,
+            output_dir=str(self.out_dir),
+            stopped=stopped,
+            failed_urls=failed_urls,
+            ok=ok,
+            skip=skip,
+            fail=fail,
+            total=total,
         )

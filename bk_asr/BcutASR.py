@@ -1,6 +1,7 @@
 import json
 import logging
 import time
+from collections.abc import Callable
 from os import PathLike
 from typing import Optional
 
@@ -25,6 +26,8 @@ API_CREATE_TASK = API_BASE_URL + "/task"
 
 # 查询结果
 API_QUERY_RESULT = API_BASE_URL + "/task/result"
+REQUEST_TIMEOUT = (10, 60)
+QUERY_TIMEOUT = (10, 30)
 
 
 class BcutASR(BaseASR):
@@ -34,7 +37,13 @@ class BcutASR(BaseASR):
         'Content-Type': 'application/json'
     }
 
-    def __init__(self, audio_path: [str, bytes], use_cache: bool = False):
+    def __init__(
+        self,
+        audio_path: [str, bytes],
+        use_cache: bool = False,
+        stopped: Callable[[], bool] | None = None,
+    ):
+        self.stopped = stopped
         super().__init__(audio_path, use_cache=use_cache)
         self.session = requests.Session()
         self.task_id = None
@@ -54,6 +63,7 @@ class BcutASR(BaseASR):
 
     def upload(self) -> None:
         """申请上传"""
+        self._check_stopped()
         if not self.file_binary:
             raise ValueError("none set data")
         payload = json.dumps({
@@ -64,10 +74,11 @@ class BcutASR(BaseASR):
             "model_id": "8",
         })
 
-        resp = requests.post(
+        resp = self.session.post(
             API_REQ_UPLOAD,
             data=payload,
-            headers=self.headers
+            headers=self.headers,
+            timeout=REQUEST_TIMEOUT,
         )
         resp.raise_for_status()
         resp = resp.json()
@@ -89,13 +100,15 @@ class BcutASR(BaseASR):
     def __upload_part(self) -> None:
         """上传音频数据"""
         for clip in range(self.__clips):
+            self._check_stopped()
             start_range = clip * self.__per_size
             end_range = (clip + 1) * self.__per_size
             logging.info(f"开始上传分片{clip}: {start_range}-{end_range}")
-            resp = requests.put(
+            resp = self.session.put(
                 self.__upload_urls[clip],
                 data=self.file_binary[start_range:end_range],
-                headers=self.headers
+                headers=self.headers,
+                timeout=REQUEST_TIMEOUT,
             )
             resp.raise_for_status()
             etag = resp.headers.get("Etag")
@@ -104,6 +117,7 @@ class BcutASR(BaseASR):
 
     def __commit_upload(self) -> None:
         """提交上传数据"""
+        self._check_stopped()
         data = json.dumps({
             "InBossKey": self.__in_boss_key,
             "ResourceId": self.__resource_id,
@@ -111,10 +125,11 @@ class BcutASR(BaseASR):
             "UploadId": self.__upload_id,
             "model_id": "8",
         })
-        resp = requests.post(
+        resp = self.session.post(
             API_COMMIT_UPLOAD,
             data=data,
-            headers=self.headers
+            headers=self.headers,
+            timeout=REQUEST_TIMEOUT,
         )
         resp.raise_for_status()
         resp = resp.json()
@@ -123,8 +138,12 @@ class BcutASR(BaseASR):
 
     def create_task(self) -> str:
         """开始创建转换任务"""
-        resp = requests.post(
-            API_CREATE_TASK, json={"resource": self.__download_url, "model_id": "8"}, headers=self.headers
+        self._check_stopped()
+        resp = self.session.post(
+            API_CREATE_TASK,
+            json={"resource": self.__download_url, "model_id": "8"},
+            headers=self.headers,
+            timeout=REQUEST_TIMEOUT,
         )
         resp.raise_for_status()
         resp = resp.json()
@@ -134,7 +153,13 @@ class BcutASR(BaseASR):
 
     def result(self, task_id: Optional[str] = None):
         """查询转换结果"""
-        resp = requests.get(API_QUERY_RESULT, params={"model_id": 8, "task_id": task_id or self.task_id}, headers=self.headers)
+        self._check_stopped()
+        resp = self.session.get(
+            API_QUERY_RESULT,
+            params={"model_id": 8, "task_id": task_id or self.task_id},
+            headers=self.headers,
+            timeout=QUERY_TIMEOUT,
+        )
         if resp.status_code == 412:
             logging.info("识别结果暂未就绪，稍后重试")
             return {"state": 0, "result": ""}
@@ -161,7 +186,7 @@ class BcutASR(BaseASR):
                 break
             if state in (5, 6):
                 raise RuntimeError("必剪识别任务失败，请换一个 ASR 接口或稍后重试。")
-            time.sleep(min(1 + attempt // 30, 5))
+            self._wait_or_stop(min(1 + attempt // 30, 5))
         else:
             raise TimeoutError("必剪识别等待超时，请稍后重试或降低并发。")
 
@@ -169,6 +194,19 @@ class BcutASR(BaseASR):
             raise RuntimeError("必剪识别完成但没有返回文字结果，请换一个 ASR 接口重试。")
         logging.info(f"转换成功")
         return json.loads(task_resp["result"])
+
+    def _check_stopped(self) -> None:
+        if self.stopped and self.stopped():
+            raise RuntimeError("已停止")
+
+    def _wait_or_stop(self, seconds: float) -> None:
+        deadline = time.monotonic() + seconds
+        while True:
+            self._check_stopped()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            time.sleep(min(0.1, remaining))
 
     def _make_segments(self, resp_data: dict) -> list[ASRDataSeg]:
         return [ASRDataSeg(u['transcript'], u['start_time'], u['end_time']) for u in resp_data['utterances']]

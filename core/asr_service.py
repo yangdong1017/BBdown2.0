@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 import requests
@@ -19,11 +20,12 @@ def transcribe_audio(
     export_format: str,
     *,
     use_cache: bool = True,
+    stopped: Callable[[], bool] | None = None,
 ) -> str:
     if engine_name not in ENGINE_MAP:
         raise ValueError(f"{engine_name} 不支持本地音频上传识别。")
     engine_cls = ENGINE_MAP[engine_name]
-    result = engine_cls(_normalize_audio_input(audio_input), use_cache=use_cache).run()
+    result = engine_cls(_normalize_audio_input(audio_input), use_cache=use_cache, stopped=stopped).run()
     return export_asr_result(result, export_format)
 
 

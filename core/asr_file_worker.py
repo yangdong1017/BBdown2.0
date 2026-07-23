@@ -6,8 +6,10 @@ from pathlib import Path
 
 from PyQt5.QtCore import QThread, pyqtSignal
 
+from core.asr_service import format_task_error
 from core.asr_task import ASRTaskResult, process_file_asr_task
 from core.config import MIN_CONCURRENCY
+from core.output_paths import OutputPathAllocator
 from core.task_scheduler import run_limited_tasks
 
 
@@ -35,6 +37,11 @@ class ASRWorkerThread(QThread):
         self.out_dir = out_dir
         self.ffmpeg_path = ffmpeg_path
         self.stop_flag = threading.Event()
+        allocator = OutputPathAllocator()
+        self.output_paths = [
+            allocator.reserve(self._preferred_output_path(path), allow_existing=True)
+            for path in self.files
+        ]
 
     def stop(self) -> None:
         self.stop_flag.set()
@@ -49,12 +56,28 @@ class ASRWorkerThread(QThread):
             path=path,
             engine_name=self.engine_name,
             export_format=self.export_format,
-            out_dir=self.out_dir,
+            output_path=self.output_paths[index],
             ffmpeg_path=self.ffmpeg_path,
             stopped=self.stop_flag.is_set,
         )
 
+    def _preferred_output_path(self, path: str) -> Path:
+        source = Path(path)
+        target_dir = Path(self.out_dir) if self.out_dir else source.parent
+        return target_dir / f"{source.stem}.{self.export_format}"
+
+    @staticmethod
+    def _task_error(index: int, path: str, exc: Exception) -> ASRTaskResult:
+        return ASRTaskResult(index, path, "fail", f"{Path(path).name}: {format_task_error(exc)}")
+
     def run(self) -> None:
+        try:
+            summary = self._run_batch()
+        except Exception as exc:
+            summary = f"任务异常: {format_task_error(exc)}"
+        self.finished_all.emit(summary)
+
+    def _run_batch(self) -> str:
         total = len(self.files)
         ok = skip = fail = 0
         processed_indices: set[int] = set()
@@ -65,6 +88,7 @@ class ASRWorkerThread(QThread):
             max_workers=min(self.concurrency, max(total, 1)),
             submit_one=self._process_one,
             should_stop=self.stop_flag.is_set,
+            on_error=self._task_error,
         ):
             processed_indices.add(result.index)
             if result.status == "ok":
@@ -88,4 +112,4 @@ class ASRWorkerThread(QThread):
 
         minutes, seconds = divmod(int(time.time() - started), 60)
         prefix = "已停止" if self.stop_flag.is_set() else "完成"
-        self.finished_all.emit(f"{prefix}: 成功 {ok} 跳过 {skip} 失败 {fail} | 耗时 {minutes:02d}:{seconds:02d}")
+        return f"{prefix}: 成功 {ok} 跳过 {skip} 失败 {fail} | 耗时 {minutes:02d}:{seconds:02d}"

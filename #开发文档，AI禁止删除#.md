@@ -61,13 +61,13 @@ README 中的版本号
 Release 文件名
 ```
 
-例如 3.1：
+例如 4.0：
 
 ```text
-BBDown 3.1
-BBDown-3.1.exe
-BBDown-3.1.zip
-v3.1
+BBDown 4.0
+BBDown-4.0.exe
+BBDown-4.0.zip
+v4.0
 ```
 
 ## 打包流程
@@ -81,15 +81,15 @@ python -m PyInstaller build_bbdown_launcher.spec --noconfirm --clean
 生成解压版：
 
 ```powershell
-New-Item -ItemType Directory -Force -Path .\release_assets\v3.1
-Compress-Archive -Path .\dist\BBDown -DestinationPath .\release_assets\v3.1\BBDown-3.1.zip -Force
+New-Item -ItemType Directory -Force -Path .\release_assets\v4.0
+Compress-Archive -Path .\dist\BBDown -DestinationPath .\release_assets\v4.0\BBDown-4.0.zip -Force
 ```
 
 生成安装包：
 
 ```powershell
 & "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" .\installer.iss
-Copy-Item .\installer_output\BBDown-3.1.exe .\release_assets\v3.1\BBDown-3.1.exe -Force
+Copy-Item .\installer_output\BBDown-4.0.exe .\release_assets\v4.0\BBDown-4.0.exe -Force
 ```
 
 ## GitHub Release 习惯
@@ -97,8 +97,8 @@ Copy-Item .\installer_output\BBDown-3.1.exe .\release_assets\v3.1\BBDown-3.1.exe
 Release 上传两个文件：
 
 ```text
-BBDown-3.1.exe
-BBDown-3.1.zip
+BBDown-4.0.exe
+BBDown-4.0.zip
 ```
 
 不要把 `dist/`、`installer_output/`、`release_assets/` 提交到 Git 仓库。
@@ -129,7 +129,7 @@ AI 修改本项目时必须遵守：
 8. 如果用户说“整理文件夹”，只清缓存和非必要产物，不动源码和私有配置。
 9. 最终回复要说清楚改了什么、测试了什么、还有什么没做。
 
-## 当前 3.1 关键变化
+## 当前 4.0 关键变化
 
 1. 豆包 API Key 不再内置。
 2. 左下角新增“设置”入口。
@@ -142,3 +142,7 @@ https://lf26-music-east.douyinstatic.com/obj/ies-music-hj/7546439142222302011.mp
 
 5. 测试结果只显示“测试成功”或“测试失败”。
 6. 没填 API Key 时，豆包转文字会提前提示，不会开始批量失败。
+7. 新增抖音视频直链批量下载、任务进度和即时停止。
+8. 配置、飞书、B站登录和转写输入完成模块拆分。
+9. 并发输出增加同名文件保护，任务异常不会中断整批任务。
+10. 所有并发入口默认值和最低值统一为 5。

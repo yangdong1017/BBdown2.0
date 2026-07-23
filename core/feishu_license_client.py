@@ -1,13 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 from typing import Any
 
-import requests
-
-
-FEISHU_API_BASE = "https://open.feishu.cn/open-apis"
+from core.feishu_api import FeishuApiConfig, FeishuBaseClient, FeishuRecordApi
 
 STATUS_UNUSED = "未使用"
 STATUS_ACTIVE = "已激活"
@@ -47,10 +44,15 @@ class FeishuLicenseConfig:
 
 
 class FeishuLicenseClient:
-    def __init__(self, config: FeishuLicenseConfig) -> None:
+    def __init__(self, config: FeishuLicenseConfig, api: FeishuRecordApi | None = None) -> None:
         self.config = config
-        self._tenant_token = ""
-        self._tenant_token_expires_at = datetime.min.replace(tzinfo=timezone.utc)
+        self.api = api or FeishuBaseClient(
+            FeishuApiConfig(
+                app_id=config.app_id,
+                app_secret=config.app_secret,
+                base_app_token=config.base_app_token,
+            )
+        )
         self._field_type_cache: dict[str, int] = {}
 
     def activate(self, *, card_key: str, machine_id: str, app_version: str) -> dict[str, Any]:
@@ -120,7 +122,7 @@ class FeishuLicenseClient:
 
     def _find_card_record(self, card_key: str) -> dict[str, Any] | None:
         target = _normalize_card_key(card_key)
-        for record in self._list_records(self.config.card_table_id):
+        for record in self.api.list_records(self.config.card_table_id):
             fields = record.get("fields") or {}
             if _normalize_card_key(_string_value(fields.get(FIELD_CARD_KEY))) == target:
                 return record
@@ -137,44 +139,13 @@ class FeishuLicenseClient:
     def _ensure_card_field_types(self) -> None:
         if self._field_type_cache:
             return
-        data = self._request(
-            "GET",
-            f"/bitable/v1/apps/{self.config.base_app_token}/tables/{self.config.card_table_id}/fields",
-        )
         self._field_type_cache = {
             str(field.get("field_name") or ""): int(field.get("type") or 0)
-            for field in data.get("items", [])
+            for field in self.api.list_fields(self.config.card_table_id)
         }
 
-    def _list_records(self, table_id: str) -> list[dict[str, Any]]:
-        records: list[dict[str, Any]] = []
-        page_token = ""
-        while True:
-            params = {
-                "page_size": "500",
-                "text_field_as_array": "false",
-            }
-            if page_token:
-                params["page_token"] = page_token
-            data = self._request(
-                "GET",
-                f"/bitable/v1/apps/{self.config.base_app_token}/tables/{table_id}/records",
-                params=params,
-            )
-            records.extend(data.get("items") or data.get("records") or [])
-            if not data.get("has_more"):
-                break
-            page_token = str(data.get("page_token") or data.get("next_page_token") or "")
-            if not page_token:
-                break
-        return records
-
     def _update_card_record(self, record_id: str, fields: dict[str, Any]) -> None:
-        self._request(
-            "PUT",
-            f"/bitable/v1/apps/{self.config.base_app_token}/tables/{self.config.card_table_id}/records/{record_id}",
-            json={"fields": fields},
-        )
+        self.api.update_record(self.config.card_table_id, record_id, fields)
 
     def _write_log_safe(
         self,
@@ -197,59 +168,9 @@ class FeishuLicenseClient:
             LOG_FIELD_REASON: reason,
         }
         try:
-            self._request(
-                "POST",
-                f"/bitable/v1/apps/{self.config.base_app_token}/tables/{self.config.log_table_id}/records",
-                json={"fields": fields},
-            )
+            self.api.create_record(self.config.log_table_id, fields)
         except Exception:
             pass
-
-    def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
-        response = requests.request(
-            method,
-            f"{FEISHU_API_BASE}{path}",
-            headers={
-                "Authorization": f"Bearer {self._tenant_access_token()}",
-                "Content-Type": "application/json; charset=utf-8",
-            },
-            timeout=15,
-            **kwargs,
-        )
-        try:
-            payload = response.json()
-        except ValueError as exc:
-            raise RuntimeError(f"飞书接口返回异常: HTTP {response.status_code}") from exc
-        if not response.ok or payload.get("code") != 0:
-            code = payload.get("code", response.status_code)
-            message = payload.get("msg") or payload.get("message") or "未知错误"
-            raise RuntimeError(f"飞书接口调用失败: {code} {message}")
-        return payload.get("data") or {}
-
-    def _tenant_access_token(self) -> str:
-        now = datetime.now(timezone.utc)
-        if self._tenant_token and self._tenant_token_expires_at - timedelta(minutes=2) > now:
-            return self._tenant_token
-
-        response = requests.post(
-            f"{FEISHU_API_BASE}/auth/v3/tenant_access_token/internal",
-            json={
-                "app_id": self.config.app_id,
-                "app_secret": self.config.app_secret,
-            },
-            timeout=15,
-        )
-        try:
-            payload = response.json()
-        except ValueError as exc:
-            raise RuntimeError(f"飞书授权返回异常: HTTP {response.status_code}") from exc
-        if not response.ok or payload.get("code") != 0 or not payload.get("tenant_access_token"):
-            code = payload.get("code", response.status_code)
-            message = payload.get("msg") or payload.get("message") or "未知错误"
-            raise RuntimeError(f"飞书授权失败: {code} {message}")
-        self._tenant_token = str(payload["tenant_access_token"])
-        self._tenant_token_expires_at = now + timedelta(seconds=int(payload.get("expire") or 7200))
-        return self._tenant_token
 
 
 def build_direct_feishu_client() -> FeishuLicenseClient | None:

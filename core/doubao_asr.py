@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 import time
 import uuid
 from collections.abc import Callable
@@ -7,7 +8,7 @@ from typing import Any
 
 import requests
 
-from core.config import load_doubao_api_key
+from core.config import APP_VERSION, load_doubao_api_key
 from core.url_audio import infer_doubao_direct_format
 
 
@@ -21,6 +22,9 @@ DOUBAO_API_KEY = ""
 
 SUCCESS_CODE = "20000000"
 PROCESSING_CODES = {"20000001", "20000002"}
+HTTP_TIMEOUT = (10, 30)
+HTTP_MAX_ATTEMPTS = 3
+RETRYABLE_HTTP_STATUS = {429, 500, 502, 503, 504}
 
 
 class DoubaoASRError(RuntimeError):
@@ -42,26 +46,25 @@ def transcribe_doubao_url(
     audio_format, content_type = infer_doubao_direct_format(url)
     request_id = str(uuid.uuid4())
 
-    log_id = _submit_task(api_key, request_id, url, audio_format)
+    log_id = _submit_task(api_key, request_id, url, audio_format, stopped=stopped)
 
-    started = time.time()
-    while time.time() - started < timeout_seconds:
-        if stopped and stopped():
-            raise DoubaoASRError("已停止")
+    started = time.monotonic()
+    while time.monotonic() - started < timeout_seconds:
+        _check_stopped(stopped)
 
-        data, status_code, message = _query_task(api_key, request_id, log_id)
+        data, status_code, message = _query_task(api_key, request_id, log_id, stopped=stopped)
         if status_code == SUCCESS_CODE:
             text = _extract_text(data)
             if text:
                 return text
             if not data or not data.get("result"):
-                time.sleep(poll_interval)
+                _wait_or_stop(poll_interval, stopped)
                 continue
             else:
                 raise DoubaoASRError("豆包识别完成但没有返回文字结果。")
 
         if status_code in PROCESSING_CODES:
-            time.sleep(poll_interval)
+            _wait_or_stop(poll_interval, stopped)
             continue
 
         raise DoubaoASRError(_format_api_error(status_code, message, data))
@@ -79,14 +82,14 @@ def test_doubao_api_key(api_key: str, *, timeout_seconds: int = 90) -> bool:
         audio_format, _ = infer_doubao_direct_format(TEST_AUDIO_URL)
         request_id = str(uuid.uuid4())
         log_id = _submit_task(api_key, request_id, TEST_AUDIO_URL, audio_format)
-        started = time.time()
+        started = time.monotonic()
 
-        while time.time() - started < timeout_seconds:
+        while time.monotonic() - started < timeout_seconds:
             data, status_code, message = _query_task(api_key, request_id, log_id)
             if status_code == SUCCESS_CODE:
                 return True
             if status_code in PROCESSING_CODES:
-                time.sleep(2.0)
+                _wait_or_stop(2.0, None)
                 continue
             return False
     except Exception:
@@ -95,9 +98,16 @@ def test_doubao_api_key(api_key: str, *, timeout_seconds: int = 90) -> bool:
     return False
 
 
-def _submit_task(api_key: str, request_id: str, url: str, audio_format: str) -> str:
+def _submit_task(
+    api_key: str,
+    request_id: str,
+    url: str,
+    audio_format: str,
+    *,
+    stopped: Callable[[], bool] | None = None,
+) -> str:
     payload = {
-        "user": {"uid": "BBDown2.1"},
+        "user": {"uid": f"BBDown-{APP_VERSION}"},
         "audio": {
             "url": url,
             "format": audio_format,
@@ -118,11 +128,11 @@ def _submit_task(api_key: str, request_id: str, url: str, audio_format: str) -> 
             "sensitive_words_filter": "",
         },
     }
-    response = requests.post(
+    response = _post_with_retry(
         SUBMIT_URL,
         headers=_headers(api_key, request_id, include_sequence=True),
-        json=payload,
-        timeout=(10, 30),
+        payload=payload,
+        stopped=stopped,
     )
     _raise_http_error(response)
     status_code = _response_status_code(response)
@@ -131,18 +141,62 @@ def _submit_task(api_key: str, request_id: str, url: str, audio_format: str) -> 
     return response.headers.get("X-Tt-Logid", "").strip()
 
 
-def _query_task(api_key: str, request_id: str, log_id: str) -> tuple[dict[str, Any], str, str]:
-    response = requests.post(
+def _query_task(
+    api_key: str,
+    request_id: str,
+    log_id: str,
+    *,
+    stopped: Callable[[], bool] | None = None,
+) -> tuple[dict[str, Any], str, str]:
+    response = _post_with_retry(
         QUERY_URL,
         headers=_headers(api_key, request_id, include_sequence=False, log_id=log_id),
-        json={},
-        timeout=(10, 30),
+        payload={},
+        stopped=stopped,
     )
     _raise_http_error(response)
     data = _safe_json(response)
     status_code = _response_status_code(response) or _data_status_code(data)
     message = _response_message(response) or _data_message(data)
     return data, status_code, message
+
+
+def _post_with_retry(
+    url: str,
+    *,
+    headers: dict[str, str],
+    payload: dict[str, Any],
+    stopped: Callable[[], bool] | None,
+) -> requests.Response:
+    last_error: requests.RequestException | None = None
+    for attempt in range(HTTP_MAX_ATTEMPTS):
+        _check_stopped(stopped)
+        try:
+            response = requests.post(url, headers=headers, json=payload, timeout=HTTP_TIMEOUT)
+        except requests.RequestException as exc:
+            last_error = exc
+        else:
+            if response.status_code not in RETRYABLE_HTTP_STATUS or attempt == HTTP_MAX_ATTEMPTS - 1:
+                return response
+
+        if attempt < HTTP_MAX_ATTEMPTS - 1:
+            delay = (2**attempt) + random.uniform(0.0, 0.5)
+            _wait_or_stop(delay, stopped)
+
+    raise DoubaoASRError("豆包识别失败：网络连接异常，请检查网络后重试。") from last_error
+
+
+def _check_stopped(stopped: Callable[[], bool] | None) -> None:
+    if stopped and stopped():
+        raise DoubaoASRError("已停止")
+
+
+def _wait_or_stop(seconds: float, stopped: Callable[[], bool] | None) -> None:
+    deadline = time.monotonic() + max(0.0, seconds)
+    while time.monotonic() < deadline:
+        _check_stopped(stopped)
+        time.sleep(min(0.1, deadline - time.monotonic()))
+    _check_stopped(stopped)
 
 
 def _headers(
@@ -199,6 +253,8 @@ def _raise_http_error(response: requests.Response) -> None:
         raise DoubaoASRError("豆包识别失败：API Key 无效或未授权。")
     if response.status_code == 403:
         raise DoubaoASRError("豆包识别失败：服务未开通、资源 ID 无权限或余额不足。")
+    if response.status_code == 429:
+        raise DoubaoASRError("豆包识别失败：请求过于频繁，请稍后重试或降低并发。")
     if response.status_code >= 500:
         raise DoubaoASRError("豆包识别失败：服务繁忙，请稍后重试。")
     response.raise_for_status()

@@ -11,6 +11,7 @@ PROJECT_ROOT = os.path.abspath(os.path.dirname(SPEC))
 APP_SCRIPT = os.path.join(PROJECT_ROOT, "app.py")
 EXE_NAME = "BBDown"
 TOOLS_DIR = os.path.join(PROJECT_ROOT, "tools")
+ASSETS_DIR = os.path.join(PROJECT_ROOT, "assets")
 
 qfw_datas, qfw_binaries, qfw_hiddenimports = collect_all("qfluentwidgets")
 
@@ -21,6 +22,8 @@ if os.path.isdir(TOOLS_DIR):
         src = os.path.join(TOOLS_DIR, name)
         if os.path.isfile(src):
             datas.append((src, "tools"))
+if os.path.isdir(ASSETS_DIR):
+    datas.append((ASSETS_DIR, "assets"))
 
 binaries = []
 binaries += qfw_binaries
@@ -34,6 +37,7 @@ hiddenimports += [
     "bk_asr.BaseASR",
     "bk_asr.BcutASR",
     "core.doubao_asr",
+    "core.feishu_api",
     "core.feishu_license_client",
     "core.license_service",
     "core.machine_id",

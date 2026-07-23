@@ -1,8 +1,8 @@
-﻿# BBDown3.1
+﻿# BBDown4.0
 
-BBDown3.1 是一个 Windows 桌面工具，用来降低批量处理视频、音频素材的操作成本。
+BBDown4.0 是一个 Windows 桌面工具，用来降低批量处理视频、音频素材的操作成本。
 
-它支持 B站链接批量下载音频，也支持将抖音音频链接、本地音频、本地视频批量转写为文字，适合整理口播文案、字幕文本和音频内容。
+它支持 B站链接批量下载音频、抖音视频直链批量下载，也支持将抖音音频链接、本地音频、本地视频批量转写为文字，适合整理口播文案、字幕文本和音频内容。
 
 ## 功能
 
@@ -12,6 +12,14 @@ BBDown3.1 是一个 Windows 桌面工具，用来降低批量处理视频、音�
 - 支持一行一个链接批量处理
 - 支持 WEB / TV 扫码登录
 - 下载失败或未产出音频的链接会自动保留，方便重试
+
+### 抖音视频下载
+
+- 支持批量粘贴 `aweme.snssdk.com/aweme/v1/play/?video_id=...` 视频直链
+- 自动提取并去重视频 ID
+- 显示单个视频和整批任务下载进度
+- 支持停止任务和失败重试
+- 当前不解析 `douyin.com/video/...` 页面链接
 
 ### 批量转文字
 
@@ -39,7 +47,7 @@ BBDown3.1 是一个 Windows 桌面工具，用来降低批量处理视频、音�
 前往 Releases 下载：
 
 ```text
-BBDown-3.1.exe
+BBDown-4.0.exe
 ```
 
 双击安装包，按照提示安装即可。
@@ -49,7 +57,7 @@ BBDown-3.1.exe
 前往 Releases 下载：
 
 ```text
-BBDown-3.1.zip
+BBDown-4.0.zip
 ```
 
 使用方法：
@@ -82,23 +90,32 @@ run_source.bat
 ## 项目结构
 
 ```text
-BBDown3.1/
+BBDown4.0/
 ├─ app.py
 ├─ core/                         # 下载、配置、任务调度、转写服务
 │  ├─ asr_service.py              # ASR 接口封装
 │  ├─ asr_task.py                 # 转写任务处理
 │  ├─ asr_file_worker.py          # 本地文件转写后台任务
+│  ├─ bilibili_workers.py         # B站下载和登录后台任务
+│  ├─ config_store.py             # 配置原子读写
+│  ├─ douyin_video_downloader.py  # 抖音视频单任务下载
+│  ├─ douyin_video_worker.py      # 抖音视频批量调度
+│  ├─ feishu_api.py               # 飞书 Base API 客户端
 │  ├─ feishu_license_client.py    # 飞书 Base 卡密直连客户端
 │  ├─ license_service.py          # 卡密激活和校验
 │  ├─ license_private.example.py  # 本地密钥配置模板
 │  ├─ machine_id.py               # 本机设备ID生成
+│  ├─ output_paths.py             # 并发输出文件名保护
 │  ├─ url_asr_worker.py           # 音频链接转写后台任务
 │  ├─ url_audio.py                # 音频链接识别和读取
-│  ├─ task_scheduler.py           # 并发任务调度
-│  └─ workers.py                  # B站下载和登录后台任务
+│  └─ task_scheduler.py           # 并发任务调度
 ├─ ui/                            # 图形界面
+│  ├─ asr_inputs.py               # 本地文件和链接输入组件
+│  ├─ bilibili_login_panel.py     # B站登录面板
+│  ├─ douyin_video_page.py        # 抖音下载页面
 │  ├─ license_dialog.py           # 卡密激活窗口
-│  ├─ settings_page.py            # 豆包 API Key 设置页
+│  └─ settings_page.py            # 豆包 API Key 设置页
+├─ tests/                         # 自动化测试
 ├─ bk_asr/                        # ASR 实现
 ├─ tools/                         # BBDown、FFmpeg、aria2c
 ├─ requirements.txt
@@ -134,7 +151,7 @@ installer_output\
 
 ## 卡密维护
 
-3.1 已接入卡密激活逻辑，默认开启强制校验。
+4.0 保留卡密激活逻辑，默认开启强制校验。
 
 本版本采用本地 EXE 直连飞书 Base 的方式。先复制模板：
 
@@ -178,7 +195,8 @@ installer.iss
 
 ```powershell
 .\.venv\Scripts\python.exe -m PyInstaller build_bbdown_launcher.spec --noconfirm --clean
-Compress-Archive -Path .\dist\BBDown -DestinationPath .\BBDown-3.1.zip -Force
+New-Item -ItemType Directory -Force -Path .\release_assets\v4.0
+Compress-Archive -Path .\dist\BBDown -DestinationPath .\release_assets\v4.0\BBDown-4.0.zip -Force
 ```
 
 3. 生成安装包：
@@ -196,15 +214,15 @@ ISCC.exe installer.iss
 生成文件：
 
 ```text
-installer_output\BBDown-3.1.exe
+installer_output\BBDown-4.0.exe
 ```
 
 4. 先测试本地产物：
 
 ```text
 dist\BBDown\BBDown.exe
-BBDown-3.1.zip
-installer_output\BBDown-3.1.exe
+release_assets\v4.0\BBDown-4.0.zip
+installer_output\BBDown-4.0.exe
 ```
 
 5. 测试无误后，再创建 GitHub Release 并上传安装包和解压包。

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
@@ -124,6 +125,7 @@ def fetch_audio_bytes(
     *,
     timeout: tuple[int, int] = (10, 120),
     max_bytes: int = 120 * 1024 * 1024,
+    stopped: Callable[[], bool] | None = None,
 ) -> tuple[bytes, str]:
     with requests.get(url, headers=DEFAULT_HEADERS, timeout=timeout, stream=True) as response:
         response.raise_for_status()
@@ -143,6 +145,8 @@ def fetch_audio_bytes(
         data = bytearray()
         total = 0
         for chunk in response.iter_content(chunk_size=1024 * 512):
+            if stopped and stopped():
+                raise AudioUrlError("已停止")
             if not chunk:
                 continue
             total += len(chunk)

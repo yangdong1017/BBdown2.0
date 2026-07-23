@@ -13,8 +13,15 @@ class AppConfig:
     asr_format: str = "txt"
     asr_concurrency: int = 5
     asr_output_dir: str = ""
-    asr_mode: str = "抖音链接转文字"
+    asr_mode: str = "抖音音频链接转文字"
     doubao_api_key: str = ""
+
+
+@dataclass(slots=True)
+class DouyinVideoConfig:
+    urls: str = ""
+    save_dir: str = ""
+    concurrency: int = 5
 
 
 @dataclass(slots=True)
@@ -33,6 +40,19 @@ class DownloadBatchResult:
     completed_files: list[str] = field(default_factory=list)
     completed: int = 0
     total: int = 0
+
+
+@dataclass(slots=True)
+class DouyinVideoBatchResult:
+    stopped: bool
+    total: int = 0
+    completed: int = 0
+    skipped: int = 0
+    failed: int = 0
+    stopped_count: int = 0
+    completed_files: list[str] = field(default_factory=list)
+    skipped_files: list[str] = field(default_factory=list)
+    failed_urls: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)

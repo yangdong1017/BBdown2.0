@@ -4,19 +4,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QColor
-from PyQt5.QtWidgets import (
-    QAbstractItemView,
-    QFileDialog,
-    QHBoxLayout,
-    QHeaderView,
-    QPlainTextEdit,
-    QTableWidgetItem,
-    QVBoxLayout,
-    QWidget,
-)
-from qfluentwidgets import BodyLabel, ComboBox, MessageBox, PrimaryPushButton, PushButton, TableWidget, TitleLabel
+from PyQt5.QtCore import pyqtSignal
+from PyQt5.QtWidgets import QFileDialog, QHBoxLayout, QVBoxLayout, QWidget
+from qfluentwidgets import BodyLabel, ComboBox, MessageBox, PrimaryPushButton, PushButton, TitleLabel
 from qfluentwidgets import ProgressBar
 
 from core.config import (
@@ -29,23 +19,14 @@ from core.config import (
     LOCAL_FILE_ASR_ENGINE_OPTIONS,
     load_doubao_api_key,
     load_app_config,
-    save_app_config,
+    update_app_config,
 )
 from core.asr_file_worker import ASRWorkerThread
-from core.media import MEDIA_EXTENSIONS, is_media
 from core.toolchain import resolve_toolchain
 from core.url_asr_worker import UrlASRBatchResult, UrlASRWorkerThread, default_url_output_dir
 from core.url_audio import extract_audio_urls, extract_douyin_share_urls
-from .widgets import ConsoleLog, TEXT_EDIT_STYLE
-
-
-STATUS_COLORS = {
-    "处理中": "#e5b84a",
-    "已完成": "#7fd26f",
-    "跳过": "#6aaee6",
-    "失败": "#ff6a5c",
-    "未处理": "#a8a8a8",
-}
+from .asr_inputs import LocalFileInput, UrlInput
+from .widgets import ConsoleLog
 
 DOUYIN_ASR_MODE = "抖音音频链接转文字"
 
@@ -68,7 +49,19 @@ class ASRPage(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(10)
+        layout.addLayout(self._build_title_row())
+        layout.addLayout(self._build_options_row())
+        layout.addLayout(self._build_output_row())
+        self._build_input_widgets(layout)
+        layout.addLayout(self._build_progress_row())
+        layout.addLayout(self._build_action_row())
 
+        self.log = ConsoleLog(self)
+        self.log.setMinimumHeight(150)
+        layout.addWidget(self.log, 0)
+        self.setAcceptDrops(True)
+
+    def _build_title_row(self) -> QHBoxLayout:
         title_row = QHBoxLayout()
         title_row.addWidget(TitleLabel("批量转文字", self))
         self.mode_combo = ComboBox(self)
@@ -76,8 +69,9 @@ class ASRPage(QWidget):
         self.mode_combo.currentTextChanged.connect(self._on_mode_changed)
         title_row.addWidget(self.mode_combo)
         title_row.addStretch(1)
-        layout.addLayout(title_row)
+        return title_row
 
+    def _build_options_row(self) -> QHBoxLayout:
         options = QHBoxLayout()
         options.addWidget(BodyLabel("ASR 接口:", self))
         self.engine_combo = ComboBox(self)
@@ -97,8 +91,9 @@ class ASRPage(QWidget):
         self.concurrency_combo.addItems([str(value) for value in ASR_CONCURRENCY_OPTIONS])
         options.addWidget(self.concurrency_combo)
         options.addStretch(1)
-        layout.addLayout(options)
+        return options
 
+    def _build_output_row(self) -> QHBoxLayout:
         out_row = QHBoxLayout()
         self.out_dir_btn = PushButton("选择输出目录", self)
         self.out_dir_btn.clicked.connect(self._choose_out_dir)
@@ -106,46 +101,20 @@ class ASRPage(QWidget):
         self.out_dir_label.setStyleSheet("color: #9a9a9a;")
         out_row.addWidget(self.out_dir_btn)
         out_row.addWidget(self.out_dir_label, 1)
-        layout.addLayout(out_row)
+        return out_row
 
-        file_row = QHBoxLayout()
-        self.add_files_btn = PushButton("选择音视频文件", self)
-        self.add_files_btn.clicked.connect(self._select_files)
-        self.add_folder_btn = PushButton("选择文件夹", self)
-        self.add_folder_btn.clicked.connect(self._select_folder)
-        self.use_download_dir_btn = PushButton("使用下载目录", self)
-        self.use_download_dir_btn.clicked.connect(self.request_download_dir.emit)
-        self.clear_btn = PushButton("清空输入", self)
-        self.clear_btn.clicked.connect(self._clear_files)
-        file_row.addWidget(self.add_files_btn)
-        file_row.addWidget(self.add_folder_btn)
-        file_row.addWidget(self.use_download_dir_btn)
-        file_row.addWidget(self.clear_btn)
-        file_row.addStretch(1)
-        layout.addLayout(file_row)
+    def _build_input_widgets(self, layout: QVBoxLayout) -> None:
+        self.local_input = LocalFileInput(self.config.save_dir, self)
+        self.local_input.request_download_dir.connect(self.request_download_dir.emit)
+        self.local_input.files_added.connect(lambda count: self.log.log("info", f"添加 {count} 个文件"))
+        self.local_input.cleared.connect(self._reset_progress)
+        layout.addWidget(self.local_input, 1)
 
-        self.url_edit = QPlainTextEdit(self)
-        self.url_edit.setPlaceholderText("粘贴抖音 mp3/wav 音频直链，一行一个；也可以粘贴包含音频直链的整段文本。")
-        self.url_edit.setMinimumHeight(76)
-        self.url_edit.setMaximumHeight(110)
-        self.url_edit.setStyleSheet(TEXT_EDIT_STYLE)
-        layout.addWidget(self.url_edit)
+        self.url_input = UrlInput(self)
+        self.url_input.cleared.connect(self._reset_progress)
+        layout.addWidget(self.url_input)
 
-        self.table = TableWidget(self)
-        self.table.setBorderVisible(True)
-        self.table.setBorderRadius(8)
-        self.table.setColumnCount(3)
-        self.table.setHorizontalHeaderLabels(["文件名", "大小", "状态"])
-        header = self.table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.Stretch)
-        header.setSectionResizeMode(1, QHeaderView.Fixed)
-        header.setSectionResizeMode(2, QHeaderView.Fixed)
-        self.table.setColumnWidth(1, 90)
-        self.table.setColumnWidth(2, 90)
-        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        layout.addWidget(self.table, 1)
-
+    def _build_progress_row(self) -> QHBoxLayout:
         progress_row = QHBoxLayout()
         self.progress_bar = ProgressBar(self)
         self.progress_bar.setRange(0, 100)
@@ -153,8 +122,9 @@ class ASRPage(QWidget):
         self.progress_label = BodyLabel("进度 0/0", self)
         progress_row.addWidget(self.progress_bar, 1)
         progress_row.addWidget(self.progress_label)
-        layout.addLayout(progress_row)
+        return progress_row
 
+    def _build_action_row(self) -> QHBoxLayout:
         action_row = QHBoxLayout()
         self.start_btn = PrimaryPushButton("开始转文字", self)
         self.start_btn.clicked.connect(self._start)
@@ -163,16 +133,11 @@ class ASRPage(QWidget):
         action_row.addWidget(self.start_btn)
         action_row.addWidget(self.open_out_btn)
         action_row.addStretch(1)
-        layout.addLayout(action_row)
-
-        self.log = ConsoleLog(self)
-        self.log.setMinimumHeight(150)
-        layout.addWidget(self.log, 0)
-        self.setAcceptDrops(True)
+        return action_row
 
     def _apply_state(self) -> None:
         self.mode_combo.setCurrentText(self.config.asr_mode)
-        self._sync_engine_options(self.mode_combo.currentText())
+        self._on_mode_changed(self.mode_combo.currentText())
         if self.config.asr_engine in self._current_engine_options():
             self.engine_combo.setCurrentText(self.config.asr_engine)
         self.format_combo.setCurrentText(self.config.asr_format)
@@ -185,7 +150,12 @@ class ASRPage(QWidget):
         self.config.asr_engine = self.engine_combo.currentText()
         self.config.asr_format = self.format_combo.currentText()
         self.config.asr_concurrency = int(self.concurrency_combo.currentText())
-        save_app_config(self.config)
+        update_app_config(
+            asr_mode=self.config.asr_mode,
+            asr_engine=self.config.asr_engine,
+            asr_format=self.config.asr_format,
+            asr_concurrency=self.config.asr_concurrency,
+        )
 
     def _is_douyin_mode(self) -> bool:
         return self.mode_combo.currentText() == DOUYIN_ASR_MODE
@@ -193,12 +163,8 @@ class ASRPage(QWidget):
     def _on_mode_changed(self, mode: str) -> None:
         is_douyin = mode == DOUYIN_ASR_MODE
         self._sync_engine_options(mode)
-        self.add_files_btn.setVisible(not is_douyin)
-        self.add_folder_btn.setVisible(not is_douyin)
-        self.use_download_dir_btn.setVisible(not is_douyin)
-        self.table.setVisible(not is_douyin)
-        self.url_edit.setVisible(is_douyin)
-        self.clear_btn.setText("清空链接" if is_douyin else "清空列表")
+        self.local_input.setVisible(not is_douyin)
+        self.url_input.setVisible(is_douyin)
         self.config.asr_mode = mode
         self._refresh_out_label()
 
@@ -250,15 +216,13 @@ class ASRPage(QWidget):
         )
         if directory:
             self.config.asr_output_dir = directory
-            save_app_config(self.config)
+            update_app_config(asr_output_dir=self.config.asr_output_dir)
             self._refresh_out_label()
 
     def _open_out(self) -> None:
         target = self.config.asr_output_dir
-        if not target and not self._is_douyin_mode() and self.table.rowCount() > 0:
-            item = self.table.item(0, 0)
-            path = item.data(Qt.UserRole) if item else ""
-            target = str(Path(path).parent) if path else ""
+        if not target and not self._is_douyin_mode():
+            target = self.local_input.first_source_directory()
         if not target and self._is_douyin_mode():
             target = str(default_url_output_dir())
         if not target or not Path(target).is_dir():
@@ -270,75 +234,11 @@ class ASRPage(QWidget):
         else:
             subprocess.Popen(["xdg-open", target])
 
-    def _select_files(self) -> None:
-        files, _ = QFileDialog.getOpenFileNames(
-            self,
-            "选择音视频文件",
-            self.config.save_dir or "",
-            "音视频文件 (*.mp3 *.wav *.m4a *.flac *.aac *.ogg *.wma *.mp4 *.mkv *.flv *.mov *.avi *.wmv *.ts *.webm *.rmvb);;所有文件 (*)",
-        )
-        self.add_files(files)
-
-    def _select_folder(self) -> None:
-        directory = QFileDialog.getExistingDirectory(self, "选择文件夹", self.config.save_dir or "")
-        if not directory:
-            return
-        files = [
-            str(path)
-            for path in Path(directory).rglob("*")
-            if path.is_file() and path.suffix.lower() in MEDIA_EXTENSIONS
-        ]
-        self.add_files(files)
-
     def add_files(self, files: list[str]) -> None:
-        existing = {
-            str(Path(self.table.item(row, 0).data(Qt.UserRole)).resolve())
-            for row in range(self.table.rowCount())
-            if self.table.item(row, 0)
-        }
-        added = 0
-        for raw_path in files:
-            path = Path(raw_path)
-            if not path.is_file() or not is_media(path):
-                continue
-            resolved = str(path.resolve())
-            if resolved in existing:
-                continue
-            row = self.table.rowCount()
-            self.table.insertRow(row)
+        self.local_input.add_files(files)
 
-            name_item = QTableWidgetItem(path.name)
-            name_item.setData(Qt.UserRole, resolved)
-
-            size_item = QTableWidgetItem(f"{path.stat().st_size / (1024 * 1024):.1f} MB")
-            status_item = QTableWidgetItem("未处理")
-            status_item.setForeground(QColor(STATUS_COLORS["未处理"]))
-
-            self.table.setItem(row, 0, name_item)
-            self.table.setItem(row, 1, size_item)
-            self.table.setItem(row, 2, status_item)
-            existing.add(resolved)
-            added += 1
-        if added:
-            self.log.log("info", f"添加 {added} 个文件")
-
-    def _clear_files(self) -> None:
-        if self._is_douyin_mode():
-            self.url_edit.clear()
-        else:
-            self.table.setRowCount(0)
+    def _reset_progress(self) -> None:
         self._set_asr_progress(0, 0)
-
-    def _collect_unprocessed(self) -> list[tuple[int, str]]:
-        files: list[tuple[int, str]] = []
-        for row in range(self.table.rowCount()):
-            status_item = self.table.item(row, 2)
-            name_item = self.table.item(row, 0)
-            if not status_item or not name_item:
-                continue
-            if status_item.text() in ("未处理", "失败"):
-                files.append((row, name_item.data(Qt.UserRole)))
-        return files
 
     def _start(self) -> None:
         if self.is_running():
@@ -349,9 +249,10 @@ class ASRPage(QWidget):
             if self.engine_combo.currentText() == DOUBAO_ENGINE_NAME and not load_doubao_api_key():
                 MessageBox("提示", "请先到左下角设置填写豆包 API Key。", self.window()).exec()
                 return
-            url_pending = extract_audio_urls(self.url_edit.toPlainText())
+            input_text = self.url_input.text()
+            url_pending = extract_audio_urls(input_text)
             if not url_pending:
-                share_urls = extract_douyin_share_urls(self.url_edit.toPlainText())
+                share_urls = extract_douyin_share_urls(input_text)
                 if share_urls:
                     MessageBox(
                         "提示",
@@ -364,7 +265,7 @@ class ASRPage(QWidget):
             self._start_url_asr(url_pending)
             return
 
-        pending = self._collect_unprocessed()
+        pending = self.local_input.pending_files()
         if not pending:
             MessageBox("提示", "没有需要处理的音视频文件。", self.window()).exec()
             return
@@ -444,10 +345,7 @@ class ASRPage(QWidget):
 
     def _on_file_status(self, index: int, status: str) -> None:
         row = self.row_index_map[index] if index < len(self.row_index_map) else index
-        if 0 <= row < self.table.rowCount():
-            item = QTableWidgetItem(status)
-            item.setForeground(QColor(STATUS_COLORS.get(status, "#cccccc")))
-            self.table.setItem(row, 2, item)
+        self.local_input.set_file_status(row, status)
 
     def _on_count(self, ok: int, skip: int, fail: int, total: int, filename: str) -> None:
         done = ok + skip + fail
@@ -485,10 +383,10 @@ class ASRPage(QWidget):
     def _on_url_finished(self, result: UrlASRBatchResult) -> None:
         self.log.log("info", f"--- {result.summary} ---")
         if result.failed_urls:
-            self.url_edit.setPlainText("\n".join(result.failed_urls))
+            self.url_input.set_failed_urls(result.failed_urls)
             self.log.log("warn", f"已把 {len(result.failed_urls)} 条失败链接留在输入框，可直接重试。")
         else:
-            self.url_edit.clear()
+            self.url_input.set_failed_urls([])
         self.start_btn.setEnabled(True)
         self.start_btn.setText("开始转文字")
         window = self.window()
@@ -503,14 +401,7 @@ class ASRPage(QWidget):
             event.ignore()
 
     def dropEvent(self, event) -> None:  # type: ignore[override]
-        files: list[str] = []
-        for url in event.mimeData().urls():
-            path = Path(url.toLocalFile())
-            if path.is_dir():
-                files.extend(str(item) for item in path.rglob("*") if item.is_file() and is_media(item))
-            elif path.is_file() and is_media(path):
-                files.append(str(path))
-        self.add_files(files)
+        self.local_input.add_dropped_urls(event.mimeData().urls())
 
     def is_running(self) -> bool:
         return bool(
