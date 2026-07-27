@@ -7,11 +7,13 @@ import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from core.douyin_video_downloader import DouyinVideoDownloader
+from core.douyin_audio_urls import DouyinAudioLink
+from core.douyin_video_downloader import DouyinMediaDownloader, DouyinVideoDownloader
 from core.douyin_video_urls import DouyinVideoLink
 
 
 VIDEO_DATA = b"\x00\x00\x00\x18ftypmp42" + (b"video-data" * 1024)
+AUDIO_DATA = b"ID3" + (b"audio-data" * 1024)
 
 
 class VideoHandler(BaseHTTPRequestHandler):
@@ -27,6 +29,13 @@ class VideoHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(VIDEO_DATA)))
             self.end_headers()
             self.wfile.write(VIDEO_DATA)
+            return
+        if self.path == "/media.mp3":
+            self.send_response(200)
+            self.send_header("Content-Type", "audio/mpeg")
+            self.send_header("Content-Length", str(len(AUDIO_DATA)))
+            self.end_headers()
+            self.wfile.write(AUDIO_DATA)
             return
         if self.path == "/slow.mp4":
             chunk = b"x" * 65536
@@ -90,6 +99,30 @@ class DouyinVideoDownloaderTests(unittest.TestCase):
             self.assertEqual(result.status, "failed")
             self.assertEqual(result.message, "视频链接已失效")
             self.assertFalse((Path(directory) / "missing.mp4.part").exists())
+
+    def test_downloads_audio_as_mp3_and_rejects_video_response(self) -> None:
+        downloader = DouyinMediaDownloader(threading.Event(), lambda *_args: None)
+        audio_link = DouyinAudioLink(
+            audio_id="test_audio",
+            url=f"{self.base_url}/media.mp3",
+            suffix=".mp3",
+        )
+        wrong_link = DouyinAudioLink(
+            audio_id="wrong_audio",
+            url=f"{self.base_url}/media.mp4",
+            suffix=".mp3",
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            result = downloader.download(audio_link, root)
+            wrong = downloader.download(wrong_link, root)
+
+            self.assertEqual(result.status, "completed")
+            self.assertEqual((root / "test_audio.mp3").read_bytes(), AUDIO_DATA)
+            self.assertEqual(wrong.status, "failed")
+            self.assertEqual(wrong.message, "该链接没有返回音频")
+            self.assertFalse((root / "wrong_audio.mp3.part").exists())
 
     def test_honors_stop_before_starting(self) -> None:
         stop_event = threading.Event()

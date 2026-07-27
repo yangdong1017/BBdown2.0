@@ -14,18 +14,26 @@ RESOURCE_ROOT = Path(getattr(sys, "_MEIPASS", APP_ROOT))
 
 CONFIG_PATH = APP_ROOT / "bbdown_gui_config.json"
 LICENSE_PATH = APP_ROOT / "bbdown_license.json"
-LOG_DIR = APP_ROOT / "bbdown_gui_logs"
 RUNTIME_DIR = APP_ROOT / "bbdown_runtime"
 TOOLS_DIR = APP_ROOT / "bbdown_tools"
 
 APP_VERSION = "4.0"
 MIN_CONCURRENCY = 5
 THREAD_OPTIONS = (5, 8, 10)
+ARIA2_CONNECTIONS_PER_TASK = 4
+BILIBILI_AUDIO_DOWNLOAD = "audio"
+BILIBILI_VIDEO_DOWNLOAD = "video"
+BILIBILI_DOWNLOAD_TYPES = (BILIBILI_AUDIO_DOWNLOAD, BILIBILI_VIDEO_DOWNLOAD)
+DEFAULT_BILIBILI_DOWNLOAD_TYPE = BILIBILI_AUDIO_DOWNLOAD
+DOUYIN_AUDIO_DOWNLOAD = "audio"
+DOUYIN_VIDEO_DOWNLOAD = "video"
+DOUYIN_DOWNLOAD_TYPES = (DOUYIN_VIDEO_DOWNLOAD, DOUYIN_AUDIO_DOWNLOAD)
+DEFAULT_DOUYIN_DOWNLOAD_TYPE = DOUYIN_VIDEO_DOWNLOAD
 DOUYIN_VIDEO_CONCURRENCY_OPTIONS = (5, 10, 20)
 BCUT_ENGINE_NAME = "必剪"
 DOUBAO_ENGINE_NAME = "豆包"
 ASR_ENGINE_OPTIONS = (BCUT_ENGINE_NAME, DOUBAO_ENGINE_NAME)
-LOCAL_FILE_ASR_ENGINE_OPTIONS = (BCUT_ENGINE_NAME,)
+LOCAL_FILE_ASR_ENGINE_OPTIONS = (BCUT_ENGINE_NAME, DOUBAO_ENGINE_NAME)
 ASR_FORMAT_OPTIONS = ("txt", "srt", "ass")
 ASR_CONCURRENCY_OPTIONS = (5, 8, 10)
 DOUBAO_ASR_CONCURRENCY_OPTIONS = (5, 8, 10, 30, 50)
@@ -40,20 +48,32 @@ DOUYIN_VIDEO_TIMEOUT = (10, 30)
 ENABLE_BBDOWN_DEBUG = False
 USE_ARIA2C_FOR_DOWNLOAD = True
 AUDIO_FILE_PATTERN = "<videoTitle>"
-MAX_LOG_LINE_LENGTH = 420
 WINDOW_TITLE = f"BBDown {APP_VERSION}"
 
 # Empty LICENSE_API_URL means the app uses core/license_private.py to connect Feishu Base directly.
 # Direct mode is simple to package, but the bundled EXE may expose Feishu credentials if reversed.
 DEFAULT_LICENSE_API_URL = ""
-LICENSE_API_URL = os.getenv("BBDOWN_LICENSE_API_URL", DEFAULT_LICENSE_API_URL).strip().rstrip("/")
-LICENSE_REQUIRED = os.getenv("BBDOWN_LICENSE_REQUIRED", "1").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _license_env(name: str, default: str) -> str:
+    """Read a license override from the environment, development builds only.
+
+    The packaged EXE must ignore these variables: otherwise setting
+    BBDOWN_LICENSE_REQUIRED=0 skips activation, and BBDOWN_LICENSE_API_URL can
+    point verification at any server that always answers "ok".
+    """
+    if IS_FROZEN:
+        return default
+    return os.getenv(name, default)
+
+
+LICENSE_API_URL = _license_env("BBDOWN_LICENSE_API_URL", DEFAULT_LICENSE_API_URL).strip().rstrip("/")
+LICENSE_REQUIRED = _license_env("BBDOWN_LICENSE_REQUIRED", "1").strip().lower() in {"1", "true", "yes", "on"}
 LICENSE_VERIFY_INTERVAL_HOURS = 24
 LICENSE_OFFLINE_GRACE_HOURS = 72
 
 
 def ensure_dirs() -> None:
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     TOOLS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -65,6 +85,10 @@ def load_app_config() -> AppConfig:
         options=THREAD_OPTIONS,
         default=DEFAULT_THREAD_COUNT,
     )
+
+    bilibili_download_type = data.get("bilibili_download_type", DEFAULT_BILIBILI_DOWNLOAD_TYPE)
+    if bilibili_download_type not in BILIBILI_DOWNLOAD_TYPES:
+        bilibili_download_type = DEFAULT_BILIBILI_DOWNLOAD_TYPE
 
     last_urls = data.get("last_urls") or data.get("last_url") or ""
     if not isinstance(last_urls, str):
@@ -106,6 +130,7 @@ def load_app_config() -> AppConfig:
         last_urls=last_urls,
         save_dir=save_dir,
         thread_count=thread_count,
+        bilibili_download_type=bilibili_download_type,
         asr_engine=asr_engine,
         asr_format=asr_format,
         asr_concurrency=asr_concurrency,
@@ -120,6 +145,7 @@ def update_app_config(**changes: object) -> None:
         "last_urls",
         "save_dir",
         "thread_count",
+        "bilibili_download_type",
         "asr_engine",
         "asr_format",
         "asr_concurrency",
@@ -139,6 +165,11 @@ def update_app_config(**changes: object) -> None:
             options=THREAD_OPTIONS,
             default=DEFAULT_THREAD_COUNT,
         )
+    if "bilibili_download_type" in normalized:
+        value = str(normalized["bilibili_download_type"])
+        normalized["bilibili_download_type"] = (
+            value if value in BILIBILI_DOWNLOAD_TYPES else DEFAULT_BILIBILI_DOWNLOAD_TYPE
+        )
     if "asr_concurrency" in normalized:
         normalized["asr_concurrency"] = _normalize_concurrency(
             normalized["asr_concurrency"],
@@ -156,6 +187,14 @@ def load_douyin_video_config() -> DouyinVideoConfig:
     if not isinstance(urls, str):
         urls = ""
 
+    audio_urls = data.get("douyin_audio_urls") or ""
+    if not isinstance(audio_urls, str):
+        audio_urls = ""
+
+    download_type = data.get("douyin_download_type", DEFAULT_DOUYIN_DOWNLOAD_TYPE)
+    if download_type not in DOUYIN_DOWNLOAD_TYPES:
+        download_type = DEFAULT_DOUYIN_DOWNLOAD_TYPE
+
     default_dir = str(Path.home() / "Downloads" / "抖音视频")
     save_dir = data.get("douyin_video_save_dir") or default_dir
     if not isinstance(save_dir, str):
@@ -166,7 +205,13 @@ def load_douyin_video_config() -> DouyinVideoConfig:
         options=DOUYIN_VIDEO_CONCURRENCY_OPTIONS,
         default=DEFAULT_DOUYIN_VIDEO_CONCURRENCY,
     )
-    return DouyinVideoConfig(urls=urls, save_dir=save_dir, concurrency=concurrency)
+    return DouyinVideoConfig(
+        urls=urls,
+        save_dir=save_dir,
+        concurrency=concurrency,
+        audio_urls=audio_urls,
+        download_type=download_type,
+    )
 
 
 def save_douyin_video_config(config: DouyinVideoConfig) -> None:
@@ -178,6 +223,12 @@ def save_douyin_video_config(config: DouyinVideoConfig) -> None:
     update_json(
         CONFIG_PATH,
         douyin_video_urls=config.urls,
+        douyin_audio_urls=config.audio_urls,
+        douyin_download_type=(
+            config.download_type
+            if config.download_type in DOUYIN_DOWNLOAD_TYPES
+            else DEFAULT_DOUYIN_DOWNLOAD_TYPE
+        ),
         douyin_video_save_dir=config.save_dir,
         douyin_video_concurrency=concurrency,
     )

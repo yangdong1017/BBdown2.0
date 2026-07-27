@@ -29,7 +29,6 @@ class _Signal:
 class _FakeLoginWorker:
     def __init__(self, **kwargs) -> None:
         self.kwargs = kwargs
-        self.log = _Signal()
         self.status = _Signal()
         self.finished_one = _Signal()
         self.running = False
@@ -55,21 +54,14 @@ class BilibiliLoginPanelTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             toolchain = Toolchain(bbdown=root / "BBDown.exe")
-            sessions: list[str] = []
-            logs: list[tuple[str, str]] = []
-
             with patch("ui.bilibili_login_panel.LoginWorkerThread", _FakeLoginWorker):
                 panel = BilibiliLoginPanel(toolchain, root, str(root))
-                panel.session_started.connect(sessions.append)
-                panel.log.connect(lambda level, message: logs.append((level, message)))
                 panel.start_login()
 
                 worker = panel.login_worker
                 self.assertIsInstance(worker, _FakeLoginWorker)
                 self.assertTrue(panel.is_running())
-                self.assertEqual(sessions, ["login"])
                 self.assertEqual(worker.kwargs["mode"], "web")
-                self.assertTrue(any(level == "info" for level, _ in logs))
 
                 worker.finished_one.emit(LoginResult(mode="web", stopped=False, return_code=0))
                 self.assertFalse(panel.is_running())
@@ -87,6 +79,8 @@ class BilibiliLoginPanelTests(unittest.TestCase):
             panel.refresh_login_status()
 
             self.assertEqual(states, ["登录状态: WEB 已登录 | TV 未登录"])
+            self.assertEqual(panel.login_state_label.text(), "登录状态: WEB 已登录 | TV 未登录")
+            self.assertTrue(panel.isAncestorOf(panel.login_state_label))
             panel.deleteLater()
 
 

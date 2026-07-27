@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -26,7 +27,6 @@ from core.toolchain import resolve_toolchain
 from core.url_asr_worker import UrlASRBatchResult, UrlASRWorkerThread, default_url_output_dir
 from core.url_audio import extract_audio_urls, extract_douyin_share_urls
 from .asr_inputs import LocalFileInput, UrlInput
-from .widgets import ConsoleLog
 
 DOUYIN_ASR_MODE = "抖音音频链接转文字"
 
@@ -55,10 +55,8 @@ class ASRPage(QWidget):
         self._build_input_widgets(layout)
         layout.addLayout(self._build_progress_row())
         layout.addLayout(self._build_action_row())
-
-        self.log = ConsoleLog(self)
-        self.log.setMinimumHeight(150)
-        layout.addWidget(self.log, 0)
+        self.status_label = BodyLabel("就绪", self)
+        layout.addWidget(self.status_label)
         self.setAcceptDrops(True)
 
     def _build_title_row(self) -> QHBoxLayout:
@@ -106,13 +104,12 @@ class ASRPage(QWidget):
     def _build_input_widgets(self, layout: QVBoxLayout) -> None:
         self.local_input = LocalFileInput(self.config.save_dir, self)
         self.local_input.request_download_dir.connect(self.request_download_dir.emit)
-        self.local_input.files_added.connect(lambda count: self.log.log("info", f"添加 {count} 个文件"))
         self.local_input.cleared.connect(self._reset_progress)
         layout.addWidget(self.local_input, 1)
 
         self.url_input = UrlInput(self)
         self.url_input.cleared.connect(self._reset_progress)
-        layout.addWidget(self.url_input)
+        layout.addWidget(self.url_input, 1)
 
     def _build_progress_row(self) -> QHBoxLayout:
         progress_row = QHBoxLayout()
@@ -245,10 +242,11 @@ class ASRPage(QWidget):
             self.stop()
             return
 
+        if self.engine_combo.currentText() == DOUBAO_ENGINE_NAME and not load_doubao_api_key():
+            MessageBox("提示", "请先到左下角设置填写豆包 API Key。", self.window()).exec()
+            return
+
         if self._is_douyin_mode():
-            if self.engine_combo.currentText() == DOUBAO_ENGINE_NAME and not load_doubao_api_key():
-                MessageBox("提示", "请先到左下角设置填写豆包 API Key。", self.window()).exec()
-                return
             input_text = self.url_input.text()
             url_pending = extract_audio_urls(input_text)
             if not url_pending:
@@ -278,12 +276,9 @@ class ASRPage(QWidget):
         files = [path for _, path in pending]
         self._set_asr_progress(0, len(files))
         ffmpeg_path = str(self.toolchain.ffmpeg) if self.toolchain.ffmpeg else None
-        self.log.log(
-            "info",
-            f"开始转文字: {len(files)} 个文件 | {self.config.asr_engine} | {self.config.asr_format} | 并发 {self.config.asr_concurrency}",
-        )
-        if ffmpeg_path is None:
-            self.log.log("warn", "未检测到 ffmpeg，视频文件无法自动转音频。")
+        self.status_label.setText(f"正在转文字，共 {len(files)} 个文件。")
+        if ffmpeg_path is None and self.config.asr_engine != DOUBAO_ENGINE_NAME:
+            self.status_label.setText("未检测到 ffmpeg，需要转换的音视频文件可能无法处理。")
 
         self.worker = ASRWorkerThread(
             files=files,
@@ -304,11 +299,10 @@ class ASRPage(QWidget):
     def _start_url_asr(self, urls: list[str]) -> None:
         self._save_state()
         self.row_index_map = []
+        self.url_input.prepare_tasks(urls)
+        self.url_input.set_running(True)
         self._set_asr_progress(0, len(urls))
-        self.log.log(
-            "info",
-            f"开始音频链接转文字: {len(urls)} 条 | {self.config.asr_engine} | {self.config.asr_format} | 并发 {self.config.asr_concurrency}",
-        )
+        self.status_label.setText(f"正在转文字，共 {len(urls)} 条音频链接。")
 
         self.url_worker = UrlASRWorkerThread(
             urls=urls,
@@ -319,6 +313,8 @@ class ASRPage(QWidget):
         )
         self.url_worker.progress.connect(self._on_url_progress)
         self.url_worker.count.connect(self._on_url_count)
+        self.url_worker.task_metadata.connect(self.url_input.set_task_metadata)
+        self.url_worker.task_status.connect(self.url_input.set_task_status)
         self.url_worker.finished_all.connect(self._on_url_finished)
         self.url_worker.start()
         self.start_btn.setEnabled(True)
@@ -336,12 +332,10 @@ class ASRPage(QWidget):
             self.start_btn.setEnabled(False)
             self.start_btn.setText("正在停止")
             self.progress_label.setText(self.progress_label.text().replace("进度", "停止中", 1))
-            self.log.log("warn", "正在停止：不会再开始新任务，正在等待当前任务结束。")
+            self.status_label.setText("正在停止，不会再开始新任务。")
 
     def _on_progress(self, index: int, path: str, status: str, message: str) -> None:
-        level = {"ok": "ok", "skip": "skip", "fail": "fail"}.get(status, "info")
-        prefix = {"ok": "OK", "skip": "SKIP", "fail": "FAIL"}.get(status, "INFO")
-        self.log.log(level, f"[{prefix}] {message}")
+        self.status_label.setText(message)
 
     def _on_file_status(self, index: int, status: str) -> None:
         row = self.row_index_map[index] if index < len(self.row_index_map) else index
@@ -355,7 +349,7 @@ class ASRPage(QWidget):
             window.setWindowTitle(f"BBDown - 转文字 {done}/{total}")
 
     def _on_finished(self, summary: str) -> None:
-        self.log.log("info", f"--- {summary} ---")
+        self.status_label.setText(summary)
         self.start_btn.setEnabled(True)
         self.start_btn.setText("开始转文字")
         window = self.window()
@@ -364,9 +358,14 @@ class ASRPage(QWidget):
         self.worker = None
 
     def _on_url_progress(self, index: int, url: str, status: str, message: str) -> None:
-        level = {"ok": "ok", "skip": "skip", "fail": "fail"}.get(status, "info")
-        prefix = {"ok": "OK", "skip": "SKIP", "fail": "FAIL"}.get(status, "INFO")
-        self.log.log(level, f"[{prefix}] {message}")
+        display_status = {
+            "ok": "已完成",
+            "skip": "已存在",
+            "fail": "失败",
+            "stopped": "已停止",
+        }.get(status, status)
+        self.url_input.set_task_status(index, display_status)
+        self.status_label.setText(message)
 
     def _on_url_count(self, ok: int, skip: int, fail: int, total: int, filename: str) -> None:
         done = ok + skip + fail
@@ -381,12 +380,14 @@ class ASRPage(QWidget):
         self.progress_label.setText(f"进度 {done}/{total} | {percent}%")
 
     def _on_url_finished(self, result: UrlASRBatchResult) -> None:
-        self.log.log("info", f"--- {result.summary} ---")
+        self.status_label.setText(result.summary)
         if result.failed_urls:
-            self.url_input.set_failed_urls(result.failed_urls)
-            self.log.log("warn", f"已把 {len(result.failed_urls)} 条失败链接留在输入框，可直接重试。")
+            retry_status = "已停止" if result.stopped else "失败"
+            self.url_input.set_failed_urls(result.failed_urls, retry_status)
+            self.status_label.setText(f"{result.summary}；失败链接已留在输入框，可直接重试。")
         else:
             self.url_input.set_failed_urls([])
+        self.url_input.set_running(False)
         self.start_btn.setEnabled(True)
         self.start_btn.setText("开始转文字")
         window = self.window()

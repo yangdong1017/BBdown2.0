@@ -14,17 +14,25 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from qfluentwidgets import PushButton, TableWidget
+from qfluentwidgets import BodyLabel, CaptionLabel, PushButton, TableWidget
 
 from core.media import MEDIA_EXTENSIONS, is_media
-from .widgets import TEXT_EDIT_STYLE
+from core.url_audio import audio_filename_from_url, extract_audio_urls
+from .widgets import CardFrame, TEXT_EDIT_STYLE
 
 
 STATUS_COLORS = {
+    "等待中": "#a8a8a8",
+    "获取信息": "#4cc2ff",
     "处理中": "#e5b84a",
+    "转换中": "#e5b84a",
+    "上传中": "#4cc2ff",
+    "识别中": "#c58cff",
     "已完成": "#7fd26f",
+    "已存在": "#6aaee6",
     "跳过": "#6aaee6",
     "失败": "#ff6a5c",
+    "已停止": "#a8a8a8",
     "未处理": "#a8a8a8",
 }
 
@@ -185,33 +193,129 @@ class UrlInput(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.urls: list[str] = []
         self._build_ui()
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
+        layout.setSpacing(14)
+
+        self.input_card = CardFrame(self)
+        input_layout = QVBoxLayout(self.input_card)
+        input_layout.setContentsMargins(18, 18, 18, 18)
+        input_layout.setSpacing(10)
+        input_layout.addWidget(BodyLabel("抖音音频链接", self.input_card))
+
+        self.edit = QPlainTextEdit(self.input_card)
+        self.edit.setPlaceholderText("粘贴抖音 mp3/wav 音频直链，一行一个；也可以粘贴包含音频直链的整段文本。")
+        self.edit.setMinimumHeight(120)
+        self.edit.setMaximumHeight(180)
+        self.edit.setStyleSheet(TEXT_EDIT_STYLE)
+        self.edit.textChanged.connect(self._sync_tasks_from_text)
+        input_layout.addWidget(self.edit)
 
         actions = QHBoxLayout()
-        self.clear_btn = PushButton("清空链接", self)
+        self.count_label = CaptionLabel("0 个有效链接", self.input_card)
+        self.clean_btn = PushButton("去重/清理", self.input_card)
+        self.clean_btn.clicked.connect(self.clean_links)
+        self.clear_btn = PushButton("清空链接", self.input_card)
         self.clear_btn.clicked.connect(self.clear)
-        actions.addWidget(self.clear_btn)
+        actions.addWidget(self.count_label)
         actions.addStretch(1)
-        layout.addLayout(actions)
+        actions.addWidget(self.clean_btn)
+        actions.addWidget(self.clear_btn)
+        input_layout.addLayout(actions)
+        layout.addWidget(self.input_card)
 
-        self.edit = QPlainTextEdit(self)
-        self.edit.setPlaceholderText("粘贴抖音 mp3/wav 音频直链，一行一个；也可以粘贴包含音频直链的整段文本。")
-        self.edit.setMinimumHeight(76)
-        self.edit.setMaximumHeight(110)
-        self.edit.setStyleSheet(TEXT_EDIT_STYLE)
-        layout.addWidget(self.edit)
+        self.table = TableWidget(self)
+        self.table.setBorderVisible(True)
+        self.table.setBorderRadius(8)
+        self.table.setColumnCount(3)
+        self.table.setHorizontalHeaderLabels(["文件名", "大小", "状态"])
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.Stretch)
+        header.setSectionResizeMode(1, QHeaderView.Fixed)
+        header.setSectionResizeMode(2, QHeaderView.Fixed)
+        self.table.setColumnWidth(1, 110)
+        self.table.setColumnWidth(2, 120)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setAlternatingRowColors(False)
+        layout.addWidget(self.table, 1)
 
     def text(self) -> str:
         return self.edit.toPlainText()
 
-    def set_failed_urls(self, urls: list[str]) -> None:
+    def set_failed_urls(self, urls: list[str], status: str = "失败") -> None:
+        self.edit.blockSignals(True)
+        self.edit.setPlainText("\n".join(urls))
+        self.edit.blockSignals(False)
+        failed = set(urls)
+        for index, url in enumerate(self.urls):
+            if url in failed:
+                self.set_task_status(index, status)
+
+    def prepare_tasks(self, urls: list[str]) -> None:
+        self._replace_tasks(urls)
+
+    def set_running(self, running: bool) -> None:
+        self.edit.setReadOnly(running)
+        self.clean_btn.setEnabled(not running)
+        self.clear_btn.setEnabled(not running)
+
+    def set_task_metadata(self, index: int, filename: str, size_bytes: int) -> None:
+        if not 0 <= index < self.table.rowCount():
+            return
+        name_item = self.table.item(index, 0)
+        size_item = self.table.item(index, 1)
+        if name_item is not None and filename:
+            name_item.setText(filename)
+        if size_item is not None:
+            size_item.setText(self._format_size(size_bytes))
+
+    def set_task_status(self, index: int, status: str) -> None:
+        if not 0 <= index < self.table.rowCount():
+            return
+        item = QTableWidgetItem(status)
+        item.setForeground(QColor(STATUS_COLORS.get(status, "#cccccc")))
+        item.setTextAlignment(Qt.AlignCenter)
+        self.table.setItem(index, 2, item)
+
+    def clean_links(self) -> None:
+        urls = extract_audio_urls(self.text())
         self.edit.setPlainText("\n".join(urls))
 
     def clear(self) -> None:
+        self.edit.blockSignals(True)
         self.edit.clear()
+        self.edit.blockSignals(False)
+        self._replace_tasks([])
         self.cleared.emit()
+
+    def _sync_tasks_from_text(self) -> None:
+        self._replace_tasks(extract_audio_urls(self.text()))
+
+    def _replace_tasks(self, urls: list[str]) -> None:
+        self.urls = list(urls)
+        self.table.setUpdatesEnabled(False)
+        self.table.setRowCount(len(urls))
+        for index, url in enumerate(urls):
+            name_item = QTableWidgetItem(audio_filename_from_url(url, index))
+            name_item.setToolTip(url)
+            size_item = QTableWidgetItem("待获取")
+            size_item.setTextAlignment(Qt.AlignCenter)
+            status_item = QTableWidgetItem("等待中")
+            status_item.setTextAlignment(Qt.AlignCenter)
+            status_item.setForeground(QColor(STATUS_COLORS["等待中"]))
+            self.table.setItem(index, 0, name_item)
+            self.table.setItem(index, 1, size_item)
+            self.table.setItem(index, 2, status_item)
+        self.table.setUpdatesEnabled(True)
+        self.count_label.setText(f"{len(urls)} 个有效链接")
+
+    @staticmethod
+    def _format_size(size_bytes: int) -> str:
+        if size_bytes <= 0:
+            return "未知"
+        return f"{size_bytes / (1024 * 1024):.1f} MB"

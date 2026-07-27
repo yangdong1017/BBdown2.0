@@ -1,16 +1,23 @@
 from __future__ import annotations
 
 import shutil
+import re
 import subprocess
 import threading
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
+from collections.abc import Callable
 
 from PyQt5.QtCore import QThread, pyqtSignal
 
-from .commands import build_download_command, build_login_command, shell_join
-from .config import ENABLE_BBDOWN_DEBUG, MAX_LOG_LINE_LENGTH, MIN_CONCURRENCY
+from .commands import build_download_command, build_login_command
+from .config import (
+    BILIBILI_AUDIO_DOWNLOAD,
+    BILIBILI_DOWNLOAD_TYPES,
+    BILIBILI_VIDEO_DOWNLOAD,
+    MIN_CONCURRENCY,
+)
 from .media import MEDIA_EXTENSIONS
 from .models import DownloadBatchResult, LoginResult, Toolchain
 from .output_paths import OutputPathAllocator
@@ -27,13 +34,12 @@ class _DownloadBatchState:
 
 
 class BaseProcessThread(QThread):
-    log = pyqtSignal(str, str)
     status = pyqtSignal(str)
 
-    def __init__(self, runtime_dir: Path, log_encoding: str, parent=None) -> None:
+    def __init__(self, runtime_dir: Path, output_encoding: str, parent=None) -> None:
         super().__init__(parent)
         self.runtime_dir = runtime_dir
-        self.log_encoding = log_encoding
+        self.output_encoding = output_encoding
         self.stop_flag = threading.Event()
         self._processes: dict[int, subprocess.Popen[str]] = {}
         self._process_lock = threading.Lock()
@@ -88,37 +94,20 @@ class BaseProcessThread(QThread):
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
-            encoding=self.log_encoding,
+            encoding=self.output_encoding,
             errors="replace",
             bufsize=1,
             creationflags=creationflags,
         )
 
-    def looks_like_qr_console_art(self, text: str) -> bool:
-        stripped = text.strip()
-        if len(stripped) < 40:
-            return False
-        normal_chars = sum(ch.isalnum() or ch.isspace() or ch in "[]-:./_\\()" for ch in stripped)
-        return normal_chars / len(stripped) < 0.25
-
-    def format_log_line(self, line: str) -> str | None:
-        if not ENABLE_BBDOWN_DEBUG and line.startswith(("Accept-Encoding:", "Cache-Control:", "Cookie:", "Referer:")):
-            return None
-        if line.lstrip().startswith("[#"):
-            return None
-        if " - Response: {" in line and len(line) > MAX_LOG_LINE_LENGTH:
-            return line[:MAX_LOG_LINE_LENGTH] + " ... [已截断]"
-        if len(line) > MAX_LOG_LINE_LENGTH:
-            return line[:MAX_LOG_LINE_LENGTH] + " ... [已截断]"
-        return line
-
-    def run_command_stream(self, command: list[str], prefix: str = "") -> int:
-        self.log.emit("info", f"{prefix}启动命令: {shell_join(command)}")
-        self.log.emit("info", f"{prefix}运行目录: {self.runtime_dir}")
+    def run_command_stream(
+        self,
+        command: list[str],
+        on_output: Callable[[str], None] | None = None,
+    ) -> int:
         try:
             process = self.launch_process(command)
-        except Exception as exc:
-            self.log.emit("fail", f"{prefix}启动失败: {exc}")
+        except Exception:
             return 1
 
         self.register_process(process)
@@ -126,13 +115,8 @@ class BaseProcessThread(QThread):
             if process.stdout is not None:
                 for raw_line in process.stdout:
                     line = raw_line.replace("\r", "").rstrip("\n")
-                    if not line:
-                        continue
-                    if self.looks_like_qr_console_art(line):
-                        continue
-                    formatted = self.format_log_line(line)
-                    if formatted is not None:
-                        self.log.emit("info", f"{prefix}{formatted}")
+                    if line and on_output is not None:
+                        on_output(line)
             return process.wait()
         finally:
             self.unregister_process(process)
@@ -141,6 +125,8 @@ class BaseProcessThread(QThread):
 class DownloadWorkerThread(BaseProcessThread):
     finished_all = pyqtSignal(object)
     progress = pyqtSignal(int, int, int)
+    task_progress = pyqtSignal(int, int)
+    task_status = pyqtSignal(int, str, str)
 
     def __init__(
         self,
@@ -149,13 +135,17 @@ class DownloadWorkerThread(BaseProcessThread):
         thread_count: int,
         toolchain: Toolchain,
         runtime_dir: Path,
-        log_encoding: str,
+        output_encoding: str,
+        download_type: str = BILIBILI_AUDIO_DOWNLOAD,
         parent=None,
     ) -> None:
-        super().__init__(runtime_dir, log_encoding, parent)
+        super().__init__(runtime_dir, output_encoding, parent)
         self.urls = urls
         self.save_dir = save_dir
         self.thread_count = max(MIN_CONCURRENCY, int(thread_count))
+        self.download_type = (
+            download_type if download_type in BILIBILI_DOWNLOAD_TYPES else BILIBILI_AUDIO_DOWNLOAD
+        )
         self.toolchain = toolchain
         self.save_path = Path(save_dir)
         self.output_paths = OutputPathAllocator()
@@ -189,8 +179,9 @@ class DownloadWorkerThread(BaseProcessThread):
     def run(self) -> None:
         try:
             result = self._run_batch()
-        except Exception as exc:
-            self.log.emit("fail", f"批量任务异常: {exc}")
+        except Exception:
+            for index in range(1, len(self.urls) + 1):
+                self.task_status.emit(index, "失败", "任务异常")
             result = DownloadBatchResult(
                 stopped=self.stop_flag.is_set(),
                 failed_urls=list(self.urls),
@@ -203,7 +194,6 @@ class DownloadWorkerThread(BaseProcessThread):
         total = len(self.urls)
         state = _DownloadBatchState()
 
-        self.log.emit("info", f"批量任务开始，共 {total} 个链接，最多 {self.thread_count} 个同时运行。")
         self._emit_download_progress(total)
 
         for result in run_limited_tasks(
@@ -230,12 +220,21 @@ class DownloadWorkerThread(BaseProcessThread):
     def _download_one(self, total: int, index: int, url: str) -> tuple[int, str, int, list[str]]:
         if self.stop_flag.is_set():
             return index, url, 1, []
-        self.log.emit("info", f"[{index}/{total}] 开始处理: {url}")
+        self.task_status.emit(index, "下载中", "")
+        self.task_progress.emit(index, 0)
         self._change_active_jobs(1, total)
         job_dir = self._job_dir(index)
         try:
-            command = build_download_command(url, str(job_dir), self.thread_count, self.toolchain)
-            return_code = self.run_command_stream(command, prefix=f"[{index}/{total}] ")
+            command = build_download_command(
+                url,
+                str(job_dir),
+                self.toolchain,
+                download_type=self.download_type,
+            )
+            return_code = self.run_command_stream(
+                command,
+                on_output=lambda line: self._emit_task_progress_from_output(index, line),
+            )
             files = self._move_job_outputs(job_dir) if return_code == 0 else []
             return index, url, return_code, files
         finally:
@@ -249,8 +248,14 @@ class DownloadWorkerThread(BaseProcessThread):
         url: str,
         exc: Exception,
     ) -> tuple[int, str, int, list[str]]:
-        self.log.emit("fail", f"[{index}/{total}] 任务异常: {exc}")
         return index, url, 1, []
+
+    def _emit_task_progress_from_output(self, index: int, line: str) -> None:
+        percentages = re.findall(r"\((\d{1,3})%\)", line)
+        if not percentages:
+            return
+        percent = min(100, max(int(value) for value in percentages))
+        self.task_progress.emit(index, percent)
 
     def _record_download_result(
         self,
@@ -259,21 +264,24 @@ class DownloadWorkerThread(BaseProcessThread):
         state: _DownloadBatchState,
     ) -> None:
         index, url, return_code, files = result
+        media_name = "视频" if self.download_type == BILIBILI_VIDEO_DOWNLOAD else "音频"
         state.processed_indices.add(index)
         with self._progress_lock:
             self._processed += 1
         if return_code == 0 and files:
             state.completed += 1
             state.completed_files.extend(files)
-            for path in files:
-                self.log.emit("ok", f"[{index}/{total}] 输出文件: {path}")
-            self.log.emit("ok", f"[{index}/{total}] 任务完成。")
+            self.task_progress.emit(index, 100)
+            self.task_status.emit(index, "已完成", "")
         elif return_code == 0:
             state.no_output_urls.append(url)
-            self.log.emit("warn", f"[{index}/{total}] 任务完成，但未产出音频文件。")
+            self.task_status.emit(index, "失败", f"未产出{media_name}")
         else:
             state.failed_urls.append(url)
-            self.log.emit("fail", f"[{index}/{total}] 任务失败，退出码: {return_code}")
+            if self.stop_flag.is_set():
+                self.task_status.emit(index, "已停止", "")
+            else:
+                self.task_status.emit(index, "失败", "下载失败")
         self._emit_download_progress(total)
 
     def _mark_unstarted_downloads(self, state: _DownloadBatchState) -> None:
@@ -282,6 +290,7 @@ class DownloadWorkerThread(BaseProcessThread):
         for index, url in enumerate(self.urls, start=1):
             if index not in state.processed_indices:
                 state.failed_urls.append(url)
+                self.task_status.emit(index, "已停止", "")
 
     def _change_active_jobs(self, delta: int, total: int) -> None:
         with self._progress_lock:
@@ -301,8 +310,8 @@ class DownloadWorkerThread(BaseProcessThread):
 class LoginWorkerThread(BaseProcessThread):
     finished_one = pyqtSignal(object)
 
-    def __init__(self, mode: str, toolchain: Toolchain, runtime_dir: Path, log_encoding: str, parent=None) -> None:
-        super().__init__(runtime_dir, log_encoding, parent)
+    def __init__(self, mode: str, toolchain: Toolchain, runtime_dir: Path, output_encoding: str, parent=None) -> None:
+        super().__init__(runtime_dir, output_encoding, parent)
         self.mode = mode
         self.toolchain = toolchain
 
@@ -311,8 +320,8 @@ class LoginWorkerThread(BaseProcessThread):
         try:
             command = build_login_command(self.mode, self.toolchain)
             return_code = self.run_command_stream(command)
-        except Exception as exc:
-            self.log.emit("fail", f"登录任务异常: {exc}")
+        except Exception:
+            return_code = 1
         self.finished_one.emit(
             LoginResult(
                 mode=self.mode,

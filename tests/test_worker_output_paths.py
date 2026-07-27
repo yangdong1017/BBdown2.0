@@ -65,6 +65,29 @@ class WorkerOutputPathTests(unittest.TestCase):
             self.assertEqual(len({path.read_bytes() for path in output_files}), 2)
             self.assertEqual(sum(len(paths) for paths in moved), 2)
 
+    def test_bilibili_video_output_is_collected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            save_dir = root / "output"
+            job_dir = root / "job"
+            job_dir.mkdir()
+            (job_dir / "video.mp4").write_bytes(b"video-with-audio")
+            worker = DownloadWorkerThread(
+                [],
+                str(save_dir),
+                5,
+                Toolchain(),
+                root,
+                "utf-8",
+                download_type="video",
+            )
+
+            moved = worker._move_job_outputs(job_dir)
+
+            self.assertEqual(len(moved), 1)
+            self.assertEqual(Path(moved[0]).suffix, ".mp4")
+            self.assertEqual(Path(moved[0]).read_bytes(), b"video-with-audio")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -6,24 +6,40 @@ import subprocess
 import sys
 from pathlib import Path
 
-from PyQt5.QtWidgets import QFileDialog, QHBoxLayout, QVBoxLayout, QWidget
+from PyQt5.QtCore import QEasingCurve, QPropertyAnimation, QUrl, Qt
+from PyQt5.QtGui import QColor, QDesktopServices
+from PyQt5.QtWidgets import (
+    QAbstractItemView,
+    QApplication,
+    QFileDialog,
+    QHBoxLayout,
+    QHeaderView,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
 
 from qfluentwidgets import (
     BodyLabel,
     CaptionLabel,
     ComboBox,
+    FluentIcon as FIF,
     MessageBox,
     PrimaryPushButton,
     ProgressBar,
     PushButton,
+    SegmentedWidget,
+    TableWidget,
     TextEdit,
     TitleLabel,
+    ToolButton,
 )
 
-from core.commands import looks_like_video_input
+from core.commands import bilibili_display_id, looks_like_video_input
 from core.config import (
-    AUDIO_FILE_PATTERN,
-    LOG_DIR,
+    ARIA2_CONNECTIONS_PER_TASK,
+    BILIBILI_AUDIO_DOWNLOAD,
+    BILIBILI_VIDEO_DOWNLOAD,
     RUNTIME_DIR,
     THREAD_OPTIONS,
     load_app_config,
@@ -33,7 +49,17 @@ from core.bilibili_workers import DownloadWorkerThread
 from core.models import AppConfig, DownloadBatchResult
 from core.toolchain import resolve_toolchain
 from .bilibili_login_panel import BilibiliLoginPanel
-from .widgets import CardFrame, ConsoleLog, TEXT_EDIT_STYLE
+from .widgets import CardFrame, TEXT_EDIT_STYLE
+
+
+BILIBILI_STANDARD_LINK = "https://www.bilibili.com/video/BV1v46zBzEX2/"
+BILIBILI_STATUS_COLORS = {
+    "等待中": "#a8a8a8",
+    "下载中": "#e5b84a",
+    "已完成": "#7fd26f",
+    "失败": "#ff6a5c",
+    "已停止": "#a8a8a8",
+}
 
 
 class DownloadPage(QWidget):
@@ -42,7 +68,6 @@ class DownloadPage(QWidget):
         self.setObjectName("download")
         self.config: AppConfig = load_app_config()
         self.toolchain = resolve_toolchain()
-        self.current_log_path = LOG_DIR / "launcher.log"
         self.download_worker: DownloadWorkerThread | None = None
         self.failed_urls: list[str] = []
         self.no_output_urls: list[str] = []
@@ -56,25 +81,61 @@ class DownloadPage(QWidget):
         root.addWidget(TitleLabel("B站下载", self))
 
         self.engine_label = CaptionLabel(self)
-        self.login_state_label = CaptionLabel(self)
         self.engine_label.setVisible(False)
-        root.addWidget(self.login_state_label)
+
+        top_row = QHBoxLayout()
+        top_row.setSpacing(10)
+        self.download_type_segment = SegmentedWidget(self)
+        self.download_type_segment.addItem(
+            BILIBILI_AUDIO_DOWNLOAD,
+            "下载音频",
+            lambda: self._on_download_type_changed(BILIBILI_AUDIO_DOWNLOAD),
+        )
+        self.download_type_segment.addItem(
+            BILIBILI_VIDEO_DOWNLOAD,
+            "下载视频",
+            lambda: self._on_download_type_changed(BILIBILI_VIDEO_DOWNLOAD),
+        )
+        self.download_type_segment.setFixedWidth(200)
+        top_row.addWidget(self.download_type_segment)
+        top_row.addStretch(1)
+        root.addLayout(top_row)
 
         split = QHBoxLayout()
-        split.setSpacing(16)
+        split.setSpacing(6)
         root.addLayout(split, 1)
 
-        left = QVBoxLayout()
+        self.left_panel = QWidget(self)
+        left = QVBoxLayout(self.left_panel)
+        left.setContentsMargins(0, 0, 0, 0)
         left.setSpacing(14)
-        left.addWidget(self._build_download_card(), 6)
-        left.addWidget(self._build_log_card(), 4)
-        split.addLayout(left, 5)
+        self.download_card = self._build_download_card()
+        left.addWidget(self.download_card, 6)
+        left.addWidget(self._build_task_table(), 4)
+        split.addWidget(self.left_panel, 1)
 
-        right = QVBoxLayout()
+        self.right_panel_toggle = ToolButton(self)
+        self.right_panel_toggle.setIcon(FIF.CARE_RIGHT_SOLID)
+        self.right_panel_toggle.setFixedSize(26, 72)
+        self.right_panel_toggle.setToolTip("收起右侧面板")
+        self.right_panel_toggle.clicked.connect(self._toggle_right_panel)
+        split.addWidget(self.right_panel_toggle, 0, Qt.AlignVCenter)
+
+        self.right_panel = QWidget(self)
+        self.right_panel.setMinimumWidth(0)
+        self.right_panel.setMaximumWidth(400)
+        right = QVBoxLayout(self.right_panel)
+        right.setContentsMargins(0, 0, 0, 0)
         right.setSpacing(14)
         right.addWidget(self._build_settings_card())
         right.addWidget(self._build_login_panel(), 1)
-        split.addLayout(right, 3)
+        split.addWidget(self.right_panel)
+
+        self.right_panel_expanded = True
+        self.right_panel_animation = QPropertyAnimation(self.right_panel, b"maximumWidth", self)
+        self.right_panel_animation.setDuration(220)
+        self.right_panel_animation.setEasingCurve(QEasingCurve.OutCubic)
+        self.right_panel_animation.finished.connect(self._on_right_panel_animation_finished)
 
         self.status_label = CaptionLabel("就绪", self)
         root.addWidget(self.status_label)
@@ -82,12 +143,26 @@ class DownloadPage(QWidget):
     def _build_download_card(self) -> CardFrame:
         content_card = CardFrame(self)
         content_layout = QVBoxLayout(content_card)
-        content_layout.setContentsMargins(18, 18, 18, 18)
-        content_layout.setSpacing(10)
-        content_layout.addWidget(BodyLabel("视频链接", content_card))
+        content_layout.setContentsMargins(18, 9, 18, 18)
+        content_layout.setSpacing(5)
+
+        standard_link_row = QHBoxLayout()
+        standard_link_row.setSpacing(10)
+        self.example_link_label = CaptionLabel(
+            f"标准链接格式：{BILIBILI_STANDARD_LINK}",
+            content_card,
+        )
+        self.example_link_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.example_link_label.setWordWrap(True)
+        self.example_link_actions = SegmentedWidget(content_card)
+        self.example_link_actions.addItem("copy", "复制", self._copy_example_link)
+        self.example_link_actions.addItem("open", "打开", self._open_example_link)
+        self.example_link_actions.setFixedWidth(150)
+        standard_link_row.addWidget(self.example_link_label, 1)
+        standard_link_row.addWidget(self.example_link_actions)
+        content_layout.addLayout(standard_link_row)
 
         self.url_edit = TextEdit(content_card)
-        self.url_edit.setPlaceholderText("在这里粘贴 B站 视频链接，一行一个 URL...")
         self.url_edit.setMinimumHeight(260)
         self.url_edit.setStyleSheet(TEXT_EDIT_STYLE)
         self.url_edit.textChanged.connect(self._update_count)
@@ -116,27 +191,31 @@ class DownloadPage(QWidget):
         self.start_btn.clicked.connect(self._start_download)
         self.stop_btn = PushButton("停止任务", content_card)
         self.stop_btn.clicked.connect(self.stop)
-        self.log_btn = PushButton("查看日志", content_card)
-        self.log_btn.clicked.connect(self._open_log_file)
         self.reset_btn = PushButton("清空任务", content_card)
         self.reset_btn.clicked.connect(self._reset_task)
         action_row.addWidget(self.start_btn)
         action_row.addWidget(self.stop_btn)
-        action_row.addWidget(self.log_btn)
         action_row.addWidget(self.reset_btn)
         action_row.addStretch(1)
         content_layout.addLayout(action_row)
         return content_card
 
-    def _build_log_card(self) -> CardFrame:
-        log_card = CardFrame(self)
-        log_layout = QVBoxLayout(log_card)
-        log_layout.setContentsMargins(18, 18, 18, 18)
-        log_layout.setSpacing(8)
-        log_layout.addWidget(BodyLabel("运行日志", log_card))
-        self.console = ConsoleLog(log_card)
-        log_layout.addWidget(self.console, 1)
-        return log_card
+    def _build_task_table(self) -> TableWidget:
+        self.table = TableWidget(self)
+        self.table.setBorderVisible(True)
+        self.table.setBorderRadius(8)
+        self.table.setColumnCount(3)
+        self.table.setHorizontalHeaderLabels(["视频ID", "进度", "状态"])
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.Stretch)
+        header.setSectionResizeMode(1, QHeaderView.Fixed)
+        header.setSectionResizeMode(2, QHeaderView.Fixed)
+        self.table.setColumnWidth(1, 110)
+        self.table.setColumnWidth(2, 180)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setAlternatingRowColors(False)
+        return self.table
 
     def _build_settings_card(self) -> CardFrame:
         settings_card = CardFrame(self)
@@ -168,10 +247,6 @@ class DownloadPage(QWidget):
         thread_row.addStretch(1)
         settings_layout.addLayout(thread_row)
 
-        self.thread_hint_label = CaptionLabel(settings_card)
-        self.thread_hint_label.setWordWrap(True)
-        settings_layout.addWidget(self.thread_hint_label)
-        settings_layout.addWidget(CaptionLabel(f"默认输出格式为 {AUDIO_FILE_PATTERN}.m4a", settings_card))
         return settings_card
 
     def _build_login_panel(self) -> BilibiliLoginPanel:
@@ -181,26 +256,25 @@ class DownloadPage(QWidget):
             save_dir=self.config.save_dir,
             parent=self,
         )
-        self.login_panel.log.connect(self._append_log)
+        self.login_state_label = self.login_panel.login_state_label
         self.login_panel.status.connect(self._set_status)
-        self.login_panel.session_started.connect(self._new_session_log)
-        self.login_panel.login_state_changed.connect(self.login_state_label.setText)
         return self.login_panel
 
     def _apply_state(self) -> None:
         self.url_edit.setPlainText(self.config.last_urls)
         self.thread_combo.setCurrentText(str(self.config.thread_count))
+        self.download_type_segment.setCurrentItem(self.config.bilibili_download_type)
         self._refresh_engine_status()
         self.login_panel.refresh_login_status()
         self._refresh_dir_label()
-        self._refresh_thread_hint()
+        self._refresh_download_type_ui()
         self._set_running_state(False)
         self._update_count()
 
     def _refresh_engine_status(self) -> None:
         state = "已连接" if self.toolchain.bbdown else "未找到"
         ffmpeg_name = self.toolchain.ffmpeg.name if self.toolchain.ffmpeg else "未检测到"
-        aria2_desc = f"{self.config.thread_count}线程/任务" if self.toolchain.aria2c else "未检测到"
+        aria2_desc = f"{ARIA2_CONNECTIONS_PER_TASK}连接/任务" if self.toolchain.aria2c else "未检测到"
         self.engine_label.setText(
             f"引擎: {self.toolchain.bbdown or '未找到'} | 状态: {state} | ffmpeg: {ffmpeg_name} | aria2c: {aria2_desc} | 批量并发: {self.config.thread_count}"
         )
@@ -212,10 +286,9 @@ class DownloadPage(QWidget):
         suffix = "" if Path(self.config.save_dir).exists() else " (目录不存在)"
         self.dir_label.setText(f"保存到: {display}{suffix}")
 
-    def _refresh_thread_hint(self) -> None:
-        self.thread_hint_label.setText(
-            f"当前 {self.config.thread_count} 并发。它同时控制批量并发数，以及每个任务内部的 aria2c 下载并发。"
-        )
+    def _refresh_download_type_ui(self) -> None:
+        is_video = self.config.bilibili_download_type == BILIBILI_VIDEO_DOWNLOAD
+        self.start_btn.setText("开始下载视频" if is_video else "开始下载音频")
 
     def _save_config(self) -> None:
         self.config.last_urls = self.url_edit.toPlainText().strip()
@@ -223,18 +296,8 @@ class DownloadPage(QWidget):
             last_urls=self.config.last_urls,
             save_dir=self.config.save_dir,
             thread_count=self.config.thread_count,
+            bilibili_download_type=self.config.bilibili_download_type,
         )
-
-    def _append_log(self, level: str, message: str) -> None:
-        self.console.log(level, message)
-        self.current_log_path.parent.mkdir(parents=True, exist_ok=True)
-        with self.current_log_path.open("a", encoding="utf-8") as fh:
-            fh.write(message + "\n")
-
-    def _new_session_log(self, name: str) -> None:
-        LOG_DIR.mkdir(parents=True, exist_ok=True)
-        self.current_log_path = LOG_DIR / f"{Path.cwd().stem}_{name}.log"
-        self.console.clear()
 
     def _parse_urls(self) -> list[str]:
         urls: list[str] = []
@@ -257,7 +320,7 @@ class DownloadPage(QWidget):
     def _clean_urls(self) -> None:
         urls = self._parse_urls()
         self.url_edit.setPlainText("\n".join(urls))
-        self._append_log("info", f"已整理链接列表，当前保留 {len(urls)} 个有效链接。")
+        self._set_status(f"已整理链接，当前保留 {len(urls)} 条。")
 
     def _choose_dir(self) -> None:
         directory = QFileDialog.getExistingDirectory(self, "选择保存目录", self.config.save_dir or str(Path.home()))
@@ -279,21 +342,42 @@ class DownloadPage(QWidget):
         else:
             subprocess.Popen(["xdg-open", str(path)])
 
-    def _open_log_file(self) -> None:
-        target = self.current_log_path if self.current_log_path.exists() else LOG_DIR
-        if sys.platform == "win32":
-            os.startfile(target)
-        elif sys.platform == "darwin":
-            subprocess.Popen(["open", str(target)])
+    def _open_example_link(self) -> None:
+        if QDesktopServices.openUrl(QUrl(BILIBILI_STANDARD_LINK)):
+            return
+        MessageBox("提示", "无法打开链接，请检查系统默认浏览器设置。", self.window()).exec()
+
+    def _copy_example_link(self) -> None:
+        QApplication.clipboard().setText(BILIBILI_STANDARD_LINK)
+        self._set_status("标准链接已复制，可以粘贴使用。")
+
+    def _toggle_right_panel(self) -> None:
+        self.right_panel_animation.stop()
+        start_width = self.right_panel.width()
+        self.right_panel_expanded = not self.right_panel_expanded
+        if self.right_panel_expanded:
+            self.right_panel.setVisible(True)
+            self.right_panel_toggle.setIcon(FIF.CARE_RIGHT_SOLID)
+            self.right_panel_toggle.setToolTip("收起右侧面板")
+            target_width = 400
         else:
-            subprocess.Popen(["xdg-open", str(target)])
+            self.right_panel_toggle.setIcon(FIF.CARE_LEFT_SOLID)
+            self.right_panel_toggle.setToolTip("展开右侧面板")
+            target_width = 0
+        self.right_panel_animation.setStartValue(start_width)
+        self.right_panel_animation.setEndValue(target_width)
+        self.right_panel_animation.start()
+
+    def _on_right_panel_animation_finished(self) -> None:
+        if not self.right_panel_expanded:
+            self.right_panel.setVisible(False)
 
     def _reset_task(self) -> None:
         if self.is_running():
             MessageBox("提示", "任务正在运行，请先停止再清空。", self.window()).exec()
             return
         self.url_edit.clear()
-        self.console.clear()
+        self.table.setRowCount(0)
         self.failed_urls = []
         self.no_output_urls = []
         self._update_count()
@@ -304,8 +388,14 @@ class DownloadPage(QWidget):
             self.config.thread_count = int(value)
         except ValueError:
             return
-        self._refresh_thread_hint()
         self._refresh_engine_status()
+        self._save_config()
+
+    def _on_download_type_changed(self, download_type: str) -> None:
+        if self.is_running():
+            return
+        self.config.bilibili_download_type = download_type
+        self._refresh_download_type_ui()
         self._save_config()
 
     def _set_running_state(self, running: bool) -> None:
@@ -314,6 +404,7 @@ class DownloadPage(QWidget):
         self.stop_btn.setText("停止任务")
         self.choose_dir_btn.setEnabled(not running)
         self.thread_combo.setEnabled(not running)
+        self.download_type_segment.setEnabled(not running)
         self.clean_btn.setEnabled(not running)
         self.login_panel.set_download_running(running)
 
@@ -337,9 +428,10 @@ class DownloadPage(QWidget):
 
         self.failed_urls = []
         self.no_output_urls = []
-        self._new_session_log("download_batch")
+        media_name = "视频" if self.config.bilibili_download_type == BILIBILI_VIDEO_DOWNLOAD else "音频"
+        self._populate_tasks(urls)
         self._on_download_progress(0, len(urls), 0)
-        self._append_log("info", f"准备开始批量下载，线程设置 {self.config.thread_count}。")
+        self._set_status(f"准备下载{media_name}，共 {len(urls)} 条。")
 
         self.download_worker = DownloadWorkerThread(
             urls=urls,
@@ -347,11 +439,13 @@ class DownloadPage(QWidget):
             thread_count=self.config.thread_count,
             toolchain=self.toolchain,
             runtime_dir=RUNTIME_DIR,
-            log_encoding=locale.getpreferredencoding(False) or "utf-8",
+            output_encoding=locale.getpreferredencoding(False) or "utf-8",
+            download_type=self.config.bilibili_download_type,
         )
-        self.download_worker.log.connect(self._append_log)
         self.download_worker.status.connect(self._set_status)
         self.download_worker.progress.connect(self._on_download_progress)
+        self.download_worker.task_progress.connect(self._on_task_progress)
+        self.download_worker.task_status.connect(self._on_task_status)
         self.download_worker.finished_all.connect(self._on_download_finished)
         self.download_worker.start()
         self._set_running_state(True)
@@ -367,36 +461,60 @@ class DownloadPage(QWidget):
         if window and total:
             window.setWindowTitle(f"BBDown - B站下载 {completed}/{total}")
 
+    def _populate_tasks(self, urls: list[str]) -> None:
+        self.table.setUpdatesEnabled(False)
+        self.table.setRowCount(len(urls))
+        for row, url in enumerate(urls):
+            id_item = QTableWidgetItem(bilibili_display_id(url))
+            progress_item = QTableWidgetItem("0%")
+            progress_item.setTextAlignment(Qt.AlignCenter)
+            status_item = QTableWidgetItem("等待中")
+            status_item.setForeground(QColor(BILIBILI_STATUS_COLORS["等待中"]))
+            self.table.setItem(row, 0, id_item)
+            self.table.setItem(row, 1, progress_item)
+            self.table.setItem(row, 2, status_item)
+        self.table.setUpdatesEnabled(True)
+
+    def _on_task_progress(self, index: int, percent: int) -> None:
+        progress_item = self.table.item(index - 1, 1)
+        if progress_item is not None:
+            progress_item.setText(f"{min(100, max(0, percent))}%")
+
+    def _on_task_status(self, index: int, status: str, detail: str) -> None:
+        row = index - 1
+        status_item = self.table.item(row, 2)
+        progress_item = self.table.item(row, 1)
+        if status_item is not None:
+            status_item.setText(f"{status}：{detail}" if status == "失败" and detail else status)
+            status_item.setForeground(QColor(BILIBILI_STATUS_COLORS.get(status, "#a8a8a8")))
+        if progress_item is not None:
+            if status == "已完成":
+                progress_item.setText("100%")
+            elif status in {"失败", "已停止"}:
+                progress_item.setText("--")
+
     def _on_download_finished(self, result: object) -> None:
         assert isinstance(result, DownloadBatchResult)
         self.download_worker = None
         self._set_running_state(False)
         if result.stopped:
-            self._append_log("warn", f"批量任务已停止，已完成 {result.completed}/{result.total}。")
             self._set_status(f"批量任务已停止，已完成 {result.completed}/{result.total}")
             return
         self.no_output_urls = self._dedupe_links(result.no_output_urls)
         self.failed_urls = self._dedupe_links(result.failed_urls)
         abnormal_urls = self._dedupe_links(self.no_output_urls + self.failed_urls)
+        media_name = "视频" if self.config.bilibili_download_type == BILIBILI_VIDEO_DOWNLOAD else "音频"
         file_count = len(result.completed_files)
         no_output_count = len(self.no_output_urls)
         failed_count = len(self.failed_urls)
-        summary = (
-            f"批量任务结束：生成音频 {file_count} 个，成功链接 {result.completed} 条，"
-            f"未产出音频 {no_output_count} 条，失败 {failed_count} 条。"
-        )
-        self._append_log("warn" if abnormal_urls else "ok", summary)
-        self._append_link_section("未产出音频链接", self.no_output_urls, "warn")
-        self._append_link_section("失败链接", self.failed_urls, "fail")
-
         if abnormal_urls:
             self.url_edit.setPlainText("\n".join(abnormal_urls))
-            self._append_log("warn", f"已将 {len(abnormal_urls)} 条异常链接填回输入框，可再次点击“开始下载”继续处理。")
             self._set_status(
-                f"批量任务结束，生成 {file_count} 个音频，剩余异常 {len(abnormal_urls)} 条"
+                f"批量任务结束：生成 {file_count} 个{media_name}，"
+                f"未产出 {no_output_count} 条，失败 {failed_count} 条"
             )
         else:
-            self._set_status(f"批量任务完成，生成 {file_count} 个音频")
+            self._set_status(f"批量任务完成，生成 {file_count} 个{media_name}")
 
     def _dedupe_links(self, links: list[str]) -> list[str]:
         result: list[str] = []
@@ -409,14 +527,6 @@ class DownloadPage(QWidget):
             result.append(link.strip())
         return result
 
-    def _append_link_section(self, title: str, links: list[str], level: str) -> None:
-        self._append_log(level if links else "info", f"{title}:")
-        if links:
-            for link in links:
-                self._append_log(level, link)
-        else:
-            self._append_log("info", "无")
-
     def stop(self) -> None:
         stopped_any = False
         if self.download_worker and self.download_worker.isRunning():
@@ -427,7 +537,6 @@ class DownloadPage(QWidget):
         if stopped_any:
             self.stop_btn.setEnabled(False)
             self.stop_btn.setText("正在停止")
-            self._append_log("warn", "正在停止：不会再开始新任务，正在结束当前任务。")
             self._set_status("正在停止任务，不再开始新任务...")
 
     def is_running(self) -> bool:

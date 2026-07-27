@@ -7,8 +7,8 @@ from pathlib import Path
 from PyQt5.QtCore import QThread, pyqtSignal
 
 from .config import MIN_CONCURRENCY
-from .douyin_video_downloader import DouyinVideoDownloadResult, DouyinVideoDownloader
-from .douyin_video_urls import DouyinVideoLink
+from .douyin_media import DouyinMediaLink
+from .douyin_video_downloader import DouyinMediaDownloadResult, DouyinMediaDownloader
 from .models import DouyinVideoBatchResult
 from .task_scheduler import run_limited_tasks
 
@@ -22,8 +22,7 @@ class _BatchState:
     stopped_count: int = 0
 
 
-class DouyinVideoWorkerThread(QThread):
-    log = pyqtSignal(str, str)
+class DouyinMediaWorkerThread(QThread):
     status = pyqtSignal(str)
     task_progress = pyqtSignal(str, int, int)
     task_status = pyqtSignal(str, str, str)
@@ -32,7 +31,7 @@ class DouyinVideoWorkerThread(QThread):
 
     def __init__(
         self,
-        links: list[DouyinVideoLink],
+        links: list[DouyinMediaLink],
         save_dir: str,
         concurrency: int,
         parent=None,
@@ -45,7 +44,7 @@ class DouyinVideoWorkerThread(QThread):
         self._counter_lock = threading.Lock()
         self._processed = 0
         self._active = 0
-        self.downloader = DouyinVideoDownloader(self.stop_event, self.task_progress.emit)
+        self.downloader = DouyinMediaDownloader(self.stop_event, self.task_progress.emit)
 
     def stop(self) -> None:
         self.status.emit("正在停止任务，不再开始新任务...")
@@ -54,9 +53,12 @@ class DouyinVideoWorkerThread(QThread):
     def run(self) -> None:
         try:
             result = self._run_batch()
-        except Exception as exc:
-            self.log.emit("fail", f"批量下载异常: {exc}")
+        except Exception:
             stopped = self.stop_event.is_set()
+            task_state = "已停止" if stopped else "失败"
+            task_detail = "" if stopped else "批量任务异常"
+            for link in self.links:
+                self.task_status.emit(link.task_id, task_state, task_detail)
             result = DouyinVideoBatchResult(
                 stopped=stopped,
                 total=len(self.links),
@@ -70,7 +72,6 @@ class DouyinVideoWorkerThread(QThread):
         total = len(self.links)
         state = _BatchState()
 
-        self.log.emit("info", f"开始下载，共 {total} 个视频，并发 {self.concurrency}。")
         self._emit_batch_progress(total)
 
         for result in run_limited_tasks(
@@ -102,13 +103,13 @@ class DouyinVideoWorkerThread(QThread):
         self,
         total: int,
         _index: int,
-        link: DouyinVideoLink,
-    ) -> DouyinVideoDownloadResult:
+        link: DouyinMediaLink,
+    ) -> DouyinMediaDownloadResult:
         if self.stop_event.is_set():
-            return DouyinVideoDownloadResult(link=link, status="stopped", message="已停止")
+            return DouyinMediaDownloadResult(link=link, status="stopped", message="已停止")
         with self._counter_lock:
             self._active += 1
-        self.task_status.emit(link.video_id, "下载中", "")
+        self.task_status.emit(link.task_id, "下载中", "")
         self._emit_batch_progress(total)
         try:
             return self.downloader.download(link, self.save_dir)
@@ -120,42 +121,38 @@ class DouyinVideoWorkerThread(QThread):
     def _task_error(
         self,
         _index: int,
-        link: DouyinVideoLink,
+        link: DouyinMediaLink,
         exc: Exception,
-    ) -> DouyinVideoDownloadResult:
-        self.log.emit("fail", f"{link.video_id}: 下载任务异常: {exc}")
-        return DouyinVideoDownloadResult(link=link, status="failed", message="下载任务异常")
+    ) -> DouyinMediaDownloadResult:
+        return DouyinMediaDownloadResult(link=link, status="failed", message="下载任务异常")
 
-    def _record_result(self, result: DouyinVideoDownloadResult, state: _BatchState) -> None:
-        state.processed_ids.add(result.link.video_id)
+    def _record_result(self, result: DouyinMediaDownloadResult, state: _BatchState) -> None:
+        state.processed_ids.add(result.link.task_id)
         with self._counter_lock:
             self._processed += 1
 
         output_name = Path(result.output_path).name
         if result.status == "completed":
             state.completed_files.append(result.output_path)
-            self.task_status.emit(result.link.video_id, "已完成", output_name)
-            self.log.emit("ok", output_name)
+            self.task_status.emit(result.link.task_id, "已完成", output_name)
         elif result.status == "exists":
             state.skipped_files.append(result.output_path)
-            self.task_status.emit(result.link.video_id, "已存在", output_name)
-            self.log.emit("skip", f"{output_name} 已存在")
+            self.task_status.emit(result.link.task_id, "已存在", output_name)
         elif result.status == "failed":
             state.failed_urls.append(result.link.url)
-            self.task_status.emit(result.link.video_id, "失败", result.message)
-            self.log.emit("fail", f"{result.link.video_id}: {result.message}")
+            self.task_status.emit(result.link.task_id, "失败", result.message)
         else:
             state.stopped_count += 1
-            self.task_status.emit(result.link.video_id, "已停止", "")
+            self.task_status.emit(result.link.task_id, "已停止", "")
 
     def _mark_unstarted(self, state: _BatchState) -> None:
         if not self.stop_event.is_set():
             return
         for link in self.links:
-            if link.video_id in state.processed_ids:
+            if link.task_id in state.processed_ids:
                 continue
             state.stopped_count += 1
-            self.task_status.emit(link.video_id, "已停止", "")
+            self.task_status.emit(link.task_id, "已停止", "")
 
     def _emit_batch_progress(self, total: int) -> None:
         with self._counter_lock:
@@ -166,3 +163,7 @@ class DouyinVideoWorkerThread(QThread):
             self.status.emit(f"正在停止 | 已处理 {processed}/{total} | 进行中 {active}")
         else:
             self.status.emit(f"下载中 {processed}/{total} | 进行中 {active} | 并发 {self.concurrency}")
+
+
+# Backward-compatible name for existing imports.
+DouyinVideoWorkerThread = DouyinMediaWorkerThread

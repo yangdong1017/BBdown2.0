@@ -38,12 +38,16 @@ def transcribe_doubao_url(
     stopped: Callable[[], bool] | None = None,
     poll_interval: float = 3.0,
     timeout_seconds: int = 30 * 60,
+    infer_format: bool = True,
 ) -> str:
     if export_format.lower() != "txt":
         raise DoubaoASRError("豆包接口当前只输出 txt 文本。")
 
     api_key = _get_api_key()
-    audio_format, content_type = infer_doubao_direct_format(url)
+    if infer_format:
+        audio_format, content_type = infer_doubao_direct_format(url)
+    else:
+        audio_format, content_type = "", ""
     request_id = str(uuid.uuid4())
 
     log_id = _submit_task(api_key, request_id, url, audio_format, stopped=stopped)
@@ -106,16 +110,21 @@ def _submit_task(
     *,
     stopped: Callable[[], bool] | None = None,
 ) -> str:
+    audio: dict[str, Any] = {"url": url}
+    if audio_format:
+        audio.update(
+            {
+                "format": audio_format,
+                "codec": "raw",
+                "rate": 16000,
+                "bits": 16,
+                "channel": 1,
+            }
+        )
+
     payload = {
         "user": {"uid": f"BBDown-{APP_VERSION}"},
-        "audio": {
-            "url": url,
-            "format": audio_format,
-            "codec": "raw",
-            "rate": 16000,
-            "bits": 16,
-            "channel": 1,
-        },
+        "audio": audio,
         "request": {
             "model_name": "bigmodel",
             "enable_itn": True,
@@ -297,15 +306,23 @@ def _data_message(data: dict[str, Any]) -> str:
 def _format_api_error(status_code: str, message: str, data: dict[str, Any]) -> str:
     raw = message or _data_message(data) or "未知错误"
     lowered = raw.lower()
+    if status_code == "20000003":
+        return "没有检测到有效人声，请确认音频内容后重试。"
+    if status_code == "45000002":
+        return "音视频内容为空，请更换文件后重试。"
+    if status_code == "45000151":
+        return "豆包无法读取这个音视频格式，请更换文件后重试。"
+    if status_code == "55000031" or status_code.startswith("550"):
+        return "豆包识别服务繁忙，请稍后重试。"
     if "key" in lowered or "auth" in lowered or "unauthorized" in lowered:
         return "豆包识别失败：API Key 无效或未授权。"
     if "balance" in lowered or "quota" in lowered or "payment" in lowered:
         return "豆包识别失败：余额不足或服务未开通。"
+    if "silence" in lowered or "no valid speech" in lowered:
+        return "没有检测到有效人声，请确认音频内容后重试。"
     if "format" in lowered or "audio" in lowered:
-        return f"豆包识别失败：音频链接格式不支持。{raw}"
-    if status_code:
-        return f"豆包识别失败：{raw}（状态码 {status_code}）"
-    return f"豆包识别失败：{raw}"
+        return "豆包识别失败：音频格式不支持，请确认文件可以正常播放。"
+    return "豆包识别失败，请稍后重试。"
 
 
 def _safe_json(response: requests.Response) -> dict[str, Any]:

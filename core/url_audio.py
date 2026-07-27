@@ -120,6 +120,68 @@ def audio_name_from_url(url: str, index: int) -> str:
     return stem or f"audio_url_{index + 1:04d}"
 
 
+def audio_filename_from_url(url: str, index: int) -> str:
+    """Return a safe display filename while keeping a known audio suffix."""
+    parsed = urlparse(url)
+    raw_name = unquote(Path(parsed.path).name)
+    suffix = Path(raw_name).suffix.lower() if raw_name else ""
+    if suffix not in AUDIO_SUFFIXES:
+        suffix = ""
+    return f"{audio_name_from_url(url, index)}{suffix}"
+
+
+def probe_audio_size(
+    url: str,
+    *,
+    timeout: tuple[int, int] = (5, 10),
+    stopped: Callable[[], bool] | None = None,
+) -> int | None:
+    """Read the remote audio size without downloading the whole file."""
+    if stopped and stopped():
+        raise AudioUrlError("已停止")
+
+    response = None
+    try:
+        response = requests.head(
+            url,
+            headers=DEFAULT_HEADERS,
+            timeout=timeout,
+            allow_redirects=True,
+        )
+        response.raise_for_status()
+        size = _positive_content_length(response.headers.get("content-length"))
+        if size is not None:
+            return size
+    except requests.RequestException:
+        pass
+    finally:
+        if response is not None:
+            response.close()
+
+    if stopped and stopped():
+        raise AudioUrlError("已停止")
+
+    headers = dict(DEFAULT_HEADERS)
+    headers["Range"] = "bytes=0-0"
+    with requests.get(
+        url,
+        headers=headers,
+        timeout=timeout,
+        allow_redirects=True,
+        stream=True,
+    ) as response:
+        response.raise_for_status()
+        content_range = response.headers.get("content-range", "")
+        if "/" in content_range:
+            total_text = content_range.rsplit("/", 1)[-1].strip()
+            size = _positive_content_length(total_text)
+            if size is not None:
+                return size
+        if response.status_code != 206:
+            return _positive_content_length(response.headers.get("content-length"))
+    return None
+
+
 def fetch_audio_bytes(
     url: str,
     *,
@@ -203,3 +265,11 @@ def _safe_stem(value: str) -> str:
     value = re.sub(r"[\\/:*?\"<>|]+", "_", value)
     value = re.sub(r"\s+", "_", value)
     return value[:120].strip("._- ")
+
+
+def _positive_content_length(value: str | None) -> int | None:
+    try:
+        size = int(value or "")
+    except (TypeError, ValueError):
+        return None
+    return size if size > 0 else None

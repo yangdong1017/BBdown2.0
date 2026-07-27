@@ -9,6 +9,7 @@ class AppConfig:
     last_urls: str = ""
     save_dir: str = ""
     thread_count: int = 5
+    bilibili_download_type: str = "audio"
     asr_engine: str = "必剪"
     asr_format: str = "txt"
     asr_concurrency: int = 5
@@ -22,6 +23,8 @@ class DouyinVideoConfig:
     urls: str = ""
     save_dir: str = ""
     concurrency: int = 5
+    audio_urls: str = ""
+    download_type: str = "video"
 
 
 @dataclass(slots=True)

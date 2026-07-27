@@ -15,6 +15,10 @@ from .notice_page import NoticePage
 from .settings_page import SettingsPage
 
 
+# Some network calls block for up to two minutes, so never wait on them forever.
+CLOSE_STOP_TIMEOUT_MS = 10000
+
+
 class MainWindow(FluentWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -26,6 +30,10 @@ class MainWindow(FluentWindow):
         self._close_timer = QTimer(self)
         self._close_timer.setInterval(100)
         self._close_timer.timeout.connect(self._finish_close_when_idle)
+        self._close_deadline_timer = QTimer(self)
+        self._close_deadline_timer.setSingleShot(True)
+        self._close_deadline_timer.setInterval(CLOSE_STOP_TIMEOUT_MS)
+        self._close_deadline_timer.timeout.connect(self._force_close)
         self.download_page = DownloadPage(self)
         self.douyin_video_page = DouyinVideoPage(self)
         self.asr_page = ASRPage(self)
@@ -76,6 +84,7 @@ class MainWindow(FluentWindow):
             self.setEnabled(False)
             self._stop_all_tasks()
             self._close_timer.start()
+            self._close_deadline_timer.start()
             event.ignore()
             return
         event.accept()
@@ -97,6 +106,10 @@ class MainWindow(FluentWindow):
     def _finish_close_when_idle(self) -> None:
         if self._has_running_tasks():
             return
+        self._force_close()
+
+    def _force_close(self) -> None:
         self._close_timer.stop()
+        self._close_deadline_timer.stop()
         self._allow_close = True
         self.close()

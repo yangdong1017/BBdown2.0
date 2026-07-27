@@ -8,6 +8,7 @@ import requests
 from core.doubao_asr import (
     DoubaoASRError,
     HTTP_TIMEOUT,
+    _format_api_error,
     _post_with_retry,
     _submit_task,
     _wait_or_stop,
@@ -36,6 +37,26 @@ class FakeResponse:
 
 
 class DoubaoASRTests(unittest.TestCase):
+    def test_silence_error_is_readable_and_hides_raw_response(self) -> None:
+        message = _format_api_error(
+            "20000003",
+            "[Normal silence audio] Handle response: no valid speech in audio",
+            {},
+        )
+
+        self.assertEqual(message, "没有检测到有效人声，请确认音频内容后重试。")
+        self.assertNotIn("Normal silence", message)
+
+    @patch("core.doubao_asr.requests.post")
+    def test_submit_can_omit_format_for_model_auto_detection(self, post) -> None:
+        post.return_value = FakeResponse(
+            headers={"X-Api-Status-Code": "20000000", "X-Tt-Logid": "log-auto"}
+        )
+
+        _submit_task("key", "request", "https://example.com/video.mp4", "")
+
+        self.assertEqual(post.call_args.kwargs["json"]["audio"], {"url": "https://example.com/video.mp4"})
+
     @patch("core.doubao_asr._wait_or_stop")
     @patch("core.doubao_asr.requests.post")
     def test_submit_retries_transient_network_error(self, post, wait) -> None:

@@ -4,11 +4,9 @@ from .config import (
     AUDIO_FILE_PATTERN,
     CONFIG_PATH,
     ENABLE_BBDOWN_DEBUG,
-    LOG_DIR,
     LICENSE_API_URL,
     LICENSE_PATH,
     LICENSE_REQUIRED,
-    MAX_LOG_LINE_LENGTH,
     RESOURCE_ROOT,
     RUNTIME_DIR,
     THREAD_OPTIONS,
@@ -22,5 +20,5 @@ from .config import (
     save_doubao_api_key,
 )
 from .models import AppConfig, DownloadBatchResult, LoginResult, Toolchain
-from .commands import build_aria2_args, build_download_command, build_login_command, shell_join
+from .commands import bilibili_display_id, build_aria2_args, build_download_command, build_login_command
 from .toolchain import resolve_toolchain

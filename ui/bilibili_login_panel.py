@@ -14,9 +14,7 @@ from .widgets import CardFrame
 
 
 class BilibiliLoginPanel(CardFrame):
-    log = pyqtSignal(str, str)
     status = pyqtSignal(str)
-    session_started = pyqtSignal(str)
     login_state_changed = pyqtSignal(str)
 
     def __init__(
@@ -64,6 +62,10 @@ class BilibiliLoginPanel(CardFrame):
         )
         layout.addWidget(self.qr_image_label)
 
+        self.login_state_label = CaptionLabel("登录状态: WEB 未登录 | TV 未登录", self)
+        self.login_state_label.setWordWrap(True)
+        layout.addWidget(self.login_state_label)
+
     def set_save_dir(self, save_dir: str) -> None:
         self.save_dir = save_dir
 
@@ -76,7 +78,9 @@ class BilibiliLoginPanel(CardFrame):
         base_dir = self.toolchain.bbdown.parent if self.toolchain.bbdown else Path.cwd()
         web_state = "已登录" if (base_dir / "BBDown.data").exists() else "未登录"
         tv_state = "已登录" if (base_dir / "BBDownTV.data").exists() else "未登录"
-        self.login_state_changed.emit(f"登录状态: WEB {web_state} | TV {tv_state}")
+        state = f"登录状态: WEB {web_state} | TV {tv_state}"
+        self.login_state_label.setText(state)
+        self.login_state_changed.emit(state)
 
     def start_login(self) -> None:
         if self.download_running:
@@ -89,19 +93,16 @@ class BilibiliLoginPanel(CardFrame):
             MessageBox("提示", "没有找到 BBDown.exe。", self.window()).exec()
             return
 
-        self.session_started.emit("login")
         self._clear_qr_preview()
         mode = "web" if "WEB" in self.mode_combo.currentText() else "tv"
         self.qr_status_label.setText("正在获取登录二维码...")
-        self.log.emit("info", f"开始执行 {'WEB 登录' if mode == 'web' else 'TV 登录'}。")
 
         self.login_worker = LoginWorkerThread(
             mode=mode,
             toolchain=self.toolchain,
             runtime_dir=self.runtime_dir,
-            log_encoding=locale.getpreferredencoding(False) or "utf-8",
+            output_encoding=locale.getpreferredencoding(False) or "utf-8",
         )
-        self.login_worker.log.connect(self.log.emit)
         self.login_worker.status.connect(self.status.emit)
         self.login_worker.finished_one.connect(self._on_login_finished)
         self.login_worker.start()
@@ -128,13 +129,10 @@ class BilibiliLoginPanel(CardFrame):
         self.refresh_login_status()
         if result.stopped:
             self.qr_status_label.setText("登录流程已停止。")
-            self.log.emit("warn", "登录流程已停止。")
         elif result.return_code == 0:
-            self.qr_status_label.setText("登录流程已结束，如已确认扫码，上方状态通常会显示为已登录。")
-            self.log.emit("ok", "登录流程完成。")
+            self.qr_status_label.setText("登录流程已结束，如已确认扫码，登录状态通常会显示为已登录。")
         else:
             self.qr_status_label.setText(f"登录流程结束，退出码 {result.return_code}")
-            self.log.emit("fail", f"登录流程结束，退出码: {result.return_code}")
 
     def _refresh_qr_preview(self) -> None:
         if not self.is_running():

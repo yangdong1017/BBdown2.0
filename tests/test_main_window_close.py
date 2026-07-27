@@ -59,6 +59,30 @@ class MainWindowCloseTests(unittest.TestCase):
         window._finish_close_when_idle()
 
         self.assertFalse(window._close_timer.isActive())
+        self.assertFalse(window._close_deadline_timer.isActive())
+        self.assertTrue(window._allow_close)
+        window.deleteLater()
+
+    def test_close_gives_up_waiting_after_deadline(self) -> None:
+        window = MainWindow()
+        pages = [_FakePage(), _FakePage(), _FakePage()]
+        window.download_page, window.douyin_video_page, window.asr_page = pages
+        event = _FakeCloseEvent()
+
+        with patch("ui.main_window.MessageBox") as message_box:
+            message_box.return_value.exec.return_value = True
+            window.closeEvent(event)
+
+        self.assertTrue(window._close_deadline_timer.isActive())
+
+        # A worker stuck in a long network call never reports idle.
+        window._finish_close_when_idle()
+        self.assertFalse(window._allow_close)
+
+        window._force_close()
+
+        self.assertFalse(window._close_timer.isActive())
+        self.assertFalse(window._close_deadline_timer.isActive())
         self.assertTrue(window._allow_close)
         window.deleteLater()
 

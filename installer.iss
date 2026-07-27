@@ -47,9 +47,7 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 Filename: "{app}\{#MyAppExeName}"; Description: "立即运行 {#MyAppName}"; Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]
-Type: filesandordirs; Name: "{app}\bbdown_gui_logs"
 Type: filesandordirs; Name: "{app}\bbdown_runtime"
 Type: filesandordirs; Name: "{app}\bbdown_tools"
 Type: files; Name: "{app}\bbdown_gui_config.json"
 Type: files; Name: "{app}\bbdown_license.json"
-Type: files; Name: "{app}\startup_trace.log"

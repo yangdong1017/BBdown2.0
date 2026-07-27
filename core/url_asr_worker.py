@@ -12,7 +12,7 @@ from core.asr_task import ASRTaskResult, process_url_asr_task
 from core.config import MIN_CONCURRENCY
 from core.output_paths import OutputPathAllocator
 from core.task_scheduler import run_limited_tasks
-from core.url_audio import audio_name_from_url
+from core.url_audio import audio_filename_from_url, audio_name_from_url, probe_audio_size
 
 
 @dataclass(slots=True)
@@ -34,6 +34,8 @@ def default_url_output_dir() -> Path:
 class UrlASRWorkerThread(QThread):
     progress = pyqtSignal(int, str, str, str)
     count = pyqtSignal(int, int, int, int, str)
+    task_metadata = pyqtSignal(int, str, int)
+    task_status = pyqtSignal(int, str)
     finished_all = pyqtSignal(object)
 
     def __init__(
@@ -65,6 +67,16 @@ class UrlASRWorkerThread(QThread):
         self.stop_flag.set()
 
     def _process_one(self, index: int, url: str) -> ASRTaskResult:
+        self.task_status.emit(index, "获取信息")
+        size = -1
+        try:
+            size = probe_audio_size(url, stopped=self.stop_flag.is_set) or -1
+        except Exception:
+            pass
+        self.task_metadata.emit(index, audio_filename_from_url(url, index), size)
+        if self.stop_flag.is_set():
+            return ASRTaskResult(index, url, "stopped", "已停止")
+        self.task_status.emit(index, "识别中")
         return process_url_asr_task(
             index=index,
             url=url,
@@ -125,6 +137,7 @@ class UrlASRWorkerThread(QThread):
             for index, url in enumerate(self.urls):
                 if index not in processed_indices:
                     failed_urls.append(url)
+                    self.task_status.emit(index, "已停止")
 
         minutes, seconds = divmod(int(time.time() - started), 60)
         stopped = self.stop_flag.is_set()

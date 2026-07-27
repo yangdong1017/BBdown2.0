@@ -31,7 +31,7 @@ class ConcurrencyDefaultsTests(unittest.TestCase):
         self.assertTrue(all(value >= MIN_CONCURRENCY for value in ALL_ASR_CONCURRENCY_OPTIONS))
         self.assertTrue(all(value >= MIN_CONCURRENCY for value in DOUYIN_VIDEO_CONCURRENCY_OPTIONS))
 
-    def test_workers_and_aria2_clamp_lower_values_to_five(self) -> None:
+    def test_workers_clamp_lower_values_and_aria2_uses_fixed_connections(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             bilibili = DownloadWorkerThread([], directory, 1, Toolchain(), root, "utf-8")
@@ -43,7 +43,7 @@ class ConcurrencyDefaultsTests(unittest.TestCase):
             self.assertEqual(douyin.concurrency, 5)
             self.assertEqual(local_asr.concurrency, 5)
             self.assertEqual(url_asr.concurrency, 5)
-            self.assertEqual(build_aria2_args(1), "-x5 -s5 -j5 -k1M")
+            self.assertEqual(build_aria2_args(), "-x4 -s4 -j1 -k1M")
 
 
 if __name__ == "__main__":

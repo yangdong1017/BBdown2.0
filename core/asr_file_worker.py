@@ -50,7 +50,6 @@ class ASRWorkerThread(QThread):
         if self.stop_flag.is_set():
             return ASRTaskResult(index, path, "stopped", "已停止")
 
-        self.file_status.emit(index, "处理中")
         return process_file_asr_task(
             index=index,
             path=path,
@@ -59,6 +58,7 @@ class ASRWorkerThread(QThread):
             output_path=self.output_paths[index],
             ffmpeg_path=self.ffmpeg_path,
             stopped=self.stop_flag.is_set,
+            status_callback=lambda status: self.file_status.emit(index, status),
         )
 
     def _preferred_output_path(self, path: str) -> Path:

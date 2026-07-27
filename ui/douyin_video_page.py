@@ -5,10 +5,11 @@ import subprocess
 import sys
 from pathlib import Path
 
-from PyQt5.QtCore import QTimer, Qt
-from PyQt5.QtGui import QColor
+from PyQt5.QtCore import QEasingCurve, QPropertyAnimation, QTimer, QUrl, Qt
+from PyQt5.QtGui import QColor, QDesktopServices
 from PyQt5.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QFileDialog,
     QHBoxLayout,
     QHeaderView,
@@ -20,24 +21,30 @@ from qfluentwidgets import (
     BodyLabel,
     CaptionLabel,
     ComboBox,
+    FluentIcon as FIF,
     MessageBox,
     PrimaryPushButton,
     ProgressBar,
     PushButton,
+    SegmentedWidget,
     TableWidget,
     TextEdit,
     TitleLabel,
+    ToolButton,
 )
 
 from core.config import (
+    DOUYIN_AUDIO_DOWNLOAD,
+    DOUYIN_VIDEO_DOWNLOAD,
     DOUYIN_VIDEO_CONCURRENCY_OPTIONS,
-    LOG_DIR,
     WINDOW_TITLE,
     load_douyin_video_config,
     save_douyin_video_config,
 )
-from core.douyin_video_urls import DouyinVideoLink, extract_douyin_video_links
-from core.douyin_video_worker import DouyinVideoWorkerThread
+from core.douyin_audio_urls import extract_douyin_audio_links
+from core.douyin_media import DouyinMediaLink
+from core.douyin_video_urls import extract_douyin_video_links
+from core.douyin_video_worker import DouyinMediaWorkerThread
 from core.models import DouyinVideoBatchResult
 from .widgets import CardFrame, TEXT_EDIT_STYLE
 
@@ -51,14 +58,24 @@ STATUS_COLORS = {
     "已停止": "#a8a8a8",
 }
 
+DOUYIN_STANDARD_VIDEO_LINK = (
+    "https://aweme.snssdk.com/aweme/v1/play/"
+    "?video_id=v0200fg10000d2t5cmnog65rqiip1p90"
+)
+DOUYIN_STANDARD_AUDIO_LINK = (
+    "https://lf9-music-east.douyinstatic.com/obj/ies-music-hj/"
+    "7546439142222302011.mp3"
+)
+
 
 class DouyinVideoPage(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("douyinVideoDownload")
         self.config = load_douyin_video_config()
-        self.worker: DouyinVideoWorkerThread | None = None
-        self.row_by_video_id: dict[str, int] = {}
+        self.worker: DouyinMediaWorkerThread | None = None
+        self.row_by_media_id: dict[str, int] = {}
+        self.current_download_type = self.config.download_type
         self.save_timer = QTimer(self)
         self.save_timer.setSingleShot(True)
         self.save_timer.setInterval(350)
@@ -71,8 +88,45 @@ class DouyinVideoPage(QWidget):
         root.setContentsMargins(20, 20, 20, 20)
         root.setSpacing(14)
         root.addLayout(self._build_title_row())
-        root.addWidget(self._build_input_card())
-        root.addWidget(self._build_task_table(), 1)
+        root.addLayout(self._build_download_options_row())
+
+        split = QHBoxLayout()
+        split.setSpacing(6)
+        root.addLayout(split, 1)
+
+        self.left_panel = QWidget(self)
+        left = QVBoxLayout(self.left_panel)
+        left.setContentsMargins(0, 0, 0, 0)
+        left.setSpacing(14)
+        self.input_card = self._build_input_card()
+        left.addWidget(self.input_card)
+        left.addWidget(self._build_task_table(), 1)
+        split.addWidget(self.left_panel, 1)
+
+        self.right_panel_toggle = ToolButton(self)
+        self.right_panel_toggle.setIcon(FIF.CARE_RIGHT_SOLID)
+        self.right_panel_toggle.setFixedSize(26, 72)
+        self.right_panel_toggle.setToolTip("收起右侧面板")
+        self.right_panel_toggle.clicked.connect(self._toggle_right_panel)
+        split.addWidget(self.right_panel_toggle, 0, Qt.AlignVCenter)
+
+        self.right_panel = QWidget(self)
+        self.right_panel.setMinimumWidth(0)
+        self.right_panel.setMaximumWidth(400)
+        right = QVBoxLayout(self.right_panel)
+        right.setContentsMargins(0, 0, 0, 0)
+        right.setSpacing(14)
+        self.download_settings_card = self._build_download_settings_card()
+        right.addWidget(self.download_settings_card)
+        right.addStretch(1)
+        split.addWidget(self.right_panel)
+
+        self.right_panel_expanded = True
+        self.right_panel_animation = QPropertyAnimation(self.right_panel, b"maximumWidth", self)
+        self.right_panel_animation.setDuration(220)
+        self.right_panel_animation.setEasingCurve(QEasingCurve.OutCubic)
+        self.right_panel_animation.finished.connect(self._on_right_panel_animation_finished)
+
         self.status_label = CaptionLabel("就绪", self)
         root.addWidget(self.status_label)
 
@@ -84,45 +138,91 @@ class DouyinVideoPage(QWidget):
         title_row.addWidget(self.count_label)
         return title_row
 
+    def _build_download_options_row(self) -> QHBoxLayout:
+        options_row = QHBoxLayout()
+        options_row.setSpacing(10)
+
+        self.download_type_segment = SegmentedWidget(self)
+        self.download_type_segment.addItem(
+            DOUYIN_VIDEO_DOWNLOAD,
+            "下载视频",
+            lambda: self._on_download_type_changed(DOUYIN_VIDEO_DOWNLOAD),
+        )
+        self.download_type_segment.addItem(
+            DOUYIN_AUDIO_DOWNLOAD,
+            "下载音频",
+            lambda: self._on_download_type_changed(DOUYIN_AUDIO_DOWNLOAD),
+        )
+        self.download_type_segment.setCurrentItem(self.current_download_type)
+        self.download_type_segment.setFixedWidth(200)
+        audio_item = self.download_type_segment.items[DOUYIN_AUDIO_DOWNLOAD]
+        audio_item.setToolTip("下载抖音音频直链")
+        options_row.addWidget(self.download_type_segment)
+        options_row.addStretch(1)
+        return options_row
+
     def _build_input_card(self) -> CardFrame:
         input_card = CardFrame(self)
         input_layout = QVBoxLayout(input_card)
-        input_layout.setContentsMargins(18, 18, 18, 18)
-        input_layout.setSpacing(10)
-        input_layout.addWidget(BodyLabel("视频链接", input_card))
-        self.url_edit = TextEdit(input_card)
-        self.url_edit.setPlaceholderText(
-            "粘贴 aweme.snssdk.com/aweme/v1/play/?video_id=... 视频链接，可一次粘贴整段文本。"
+        input_layout.setContentsMargins(18, 9, 18, 18)
+        input_layout.setSpacing(5)
+
+        video_link_row = QHBoxLayout()
+        video_link_row.setSpacing(10)
+        self.standard_link_label = CaptionLabel(
+            f"标准视频链接：{DOUYIN_STANDARD_VIDEO_LINK}",
+            input_card,
         )
+        self.standard_link_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.standard_link_label.setToolTip(DOUYIN_STANDARD_VIDEO_LINK)
+        self.standard_link_label.setWordWrap(True)
+        self.standard_link_actions = SegmentedWidget(input_card)
+        self.standard_link_actions.addItem("copy", "复制", self._copy_standard_link)
+        self.standard_link_actions.addItem("open", "打开", self._open_standard_link)
+        self.standard_link_actions.setFixedWidth(150)
+        video_link_row.addWidget(self.standard_link_label, 1)
+        video_link_row.addWidget(self.standard_link_actions)
+        input_layout.addLayout(video_link_row)
+
+        self.url_edit = TextEdit(input_card)
         self.url_edit.setMinimumHeight(145)
         self.url_edit.setMaximumHeight(210)
         self.url_edit.setStyleSheet(TEXT_EDIT_STYLE)
         self.url_edit.textChanged.connect(self._on_text_changed)
         input_layout.addWidget(self.url_edit)
-        input_layout.addLayout(self._build_settings_row(input_card))
-
-        self.dir_label = CaptionLabel(input_card)
-        self.dir_label.setWordWrap(True)
-        input_layout.addWidget(self.dir_label)
         input_layout.addLayout(self._build_progress_row(input_card))
         input_layout.addLayout(self._build_action_row(input_card))
         return input_card
 
-    def _build_settings_row(self, parent: QWidget) -> QHBoxLayout:
-        settings_row = QHBoxLayout()
-        self.choose_dir_btn = PushButton("更改保存目录", parent)
+    def _build_download_settings_card(self) -> CardFrame:
+        settings_card = CardFrame(self)
+        settings_layout = QVBoxLayout(settings_card)
+        settings_layout.setContentsMargins(18, 18, 18, 18)
+        settings_layout.setSpacing(12)
+        settings_layout.addWidget(BodyLabel("下载设置", settings_card))
+
+        dir_row = QHBoxLayout()
+        self.choose_dir_btn = PushButton("选择保存目录", settings_card)
         self.choose_dir_btn.clicked.connect(self._choose_dir)
-        self.open_dir_btn = PushButton("打开目录", parent)
+        self.open_dir_btn = PushButton("打开目录", settings_card)
         self.open_dir_btn.clicked.connect(self._open_save_dir)
-        settings_row.addWidget(self.choose_dir_btn)
-        settings_row.addWidget(self.open_dir_btn)
-        settings_row.addStretch(1)
-        settings_row.addWidget(BodyLabel("并发", parent))
-        self.concurrency_combo = ComboBox(parent)
+        dir_row.addWidget(self.choose_dir_btn)
+        dir_row.addWidget(self.open_dir_btn)
+        settings_layout.addLayout(dir_row)
+
+        self.dir_label = CaptionLabel(settings_card)
+        self.dir_label.setWordWrap(True)
+        settings_layout.addWidget(self.dir_label)
+
+        concurrency_row = QHBoxLayout()
+        concurrency_row.addWidget(BodyLabel("并发", settings_card))
+        self.concurrency_combo = ComboBox(settings_card)
         self.concurrency_combo.addItems([str(value) for value in DOUYIN_VIDEO_CONCURRENCY_OPTIONS])
         self.concurrency_combo.currentTextChanged.connect(self._on_concurrency_changed)
-        settings_row.addWidget(self.concurrency_combo)
-        return settings_row
+        concurrency_row.addWidget(self.concurrency_combo)
+        concurrency_row.addStretch(1)
+        settings_layout.addLayout(concurrency_row)
+        return settings_card
 
     def _build_progress_row(self, parent: QWidget) -> QHBoxLayout:
         progress_row = QHBoxLayout()
@@ -153,7 +253,8 @@ class DouyinVideoPage(QWidget):
         self.table.setBorderVisible(True)
         self.table.setBorderRadius(8)
         self.table.setColumnCount(3)
-        self.table.setHorizontalHeaderLabels(["视频ID", "进度", "状态"])
+        media_name = "音频" if self.current_download_type == DOUYIN_AUDIO_DOWNLOAD else "视频"
+        self.table.setHorizontalHeaderLabels([f"{media_name}ID", "进度", "状态"])
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.Stretch)
         header.setSectionResizeMode(1, QHeaderView.Fixed)
@@ -166,19 +267,55 @@ class DouyinVideoPage(QWidget):
         return self.table
 
     def _apply_state(self) -> None:
-        self.url_edit.setPlainText(self.config.urls)
+        self.download_type_segment.setCurrentItem(self.current_download_type)
+        self.url_edit.setPlainText(self._active_urls_text())
         self.concurrency_combo.setCurrentText(str(self.config.concurrency))
         self._refresh_dir_label()
+        self._refresh_download_type_ui()
         self._set_running_state(False)
         self._refresh_link_count()
+
+    def _on_download_type_changed(self, download_type: str) -> None:
+        self._store_active_urls()
+        self.current_download_type = download_type
+        self.config.download_type = download_type
+        self.download_type_segment.setCurrentItem(download_type)
+        self.url_edit.blockSignals(True)
+        self.url_edit.setPlainText(self._active_urls_text())
+        self.url_edit.blockSignals(False)
+        self.table.setRowCount(0)
+        self.row_by_media_id.clear()
+        self._on_batch_progress(0, 0, 0)
+        self._refresh_download_type_ui()
+        self._refresh_link_count()
+        self.status_label.setText("就绪")
+        self.save_timer.start()
+
+    def _refresh_download_type_ui(self) -> None:
+        is_video = self.current_download_type == DOUYIN_VIDEO_DOWNLOAD
+        if is_video:
+            self.standard_link_label.setText(f"标准视频链接：{DOUYIN_STANDARD_VIDEO_LINK}")
+            self.standard_link_label.setToolTip(DOUYIN_STANDARD_VIDEO_LINK)
+            self.start_btn.setText("开始下载视频")
+        else:
+            self.standard_link_label.setText(f"标准音频链接：{DOUYIN_STANDARD_AUDIO_LINK}")
+            self.standard_link_label.setToolTip(DOUYIN_STANDARD_AUDIO_LINK)
+            self.start_btn.setText("开始下载音频")
+        self.standard_link_actions.setVisible(True)
+        if hasattr(self, "table"):
+            media_name = "视频" if is_video else "音频"
+            self.table.setHorizontalHeaderLabels([f"{media_name}ID", "进度", "状态"])
+        if not self.is_running():
+            self.start_btn.setEnabled(True)
 
     def _on_text_changed(self) -> None:
         self._refresh_link_count()
         self.save_timer.start()
 
     def _refresh_link_count(self) -> None:
-        count = len(extract_douyin_video_links(self.url_edit.toPlainText()))
-        self.count_label.setText(f"检测到 {count} 条可下载链接")
+        count = len(self._current_links())
+        media_name = "视频" if self.current_download_type == DOUYIN_VIDEO_DOWNLOAD else "音频"
+        self.count_label.setText(f"检测到 {count} 条可下载{media_name}链接")
 
     def _on_concurrency_changed(self, value: str) -> None:
         try:
@@ -188,8 +325,32 @@ class DouyinVideoPage(QWidget):
         self.save_timer.start()
 
     def _save_config(self) -> None:
-        self.config.urls = self.url_edit.toPlainText().strip()
+        self._store_active_urls()
+        self.config.download_type = self.current_download_type
         save_douyin_video_config(self.config)
+
+    def _store_active_urls(self) -> None:
+        text = self.url_edit.toPlainText().strip()
+        if self.current_download_type == DOUYIN_AUDIO_DOWNLOAD:
+            self.config.audio_urls = text
+        else:
+            self.config.urls = text
+
+    def _active_urls_text(self) -> str:
+        if self.current_download_type == DOUYIN_AUDIO_DOWNLOAD:
+            return self.config.audio_urls
+        return self.config.urls
+
+    def _current_links(self) -> list[DouyinMediaLink]:
+        text = self.url_edit.toPlainText()
+        if self.current_download_type == DOUYIN_AUDIO_DOWNLOAD:
+            return list(extract_douyin_audio_links(text))
+        return list(extract_douyin_video_links(text))
+
+    def _current_standard_link(self) -> str:
+        if self.current_download_type == DOUYIN_AUDIO_DOWNLOAD:
+            return DOUYIN_STANDARD_AUDIO_LINK
+        return DOUYIN_STANDARD_VIDEO_LINK
 
     def _choose_dir(self) -> None:
         directory = QFileDialog.getExistingDirectory(
@@ -220,22 +381,53 @@ class DouyinVideoPage(QWidget):
         else:
             subprocess.Popen(["xdg-open", str(path)])
 
+    def _copy_standard_link(self) -> None:
+        QApplication.clipboard().setText(self._current_standard_link())
+        self.status_label.setText("标准链接已复制，可以粘贴使用。")
+
+    def _open_standard_link(self) -> None:
+        if QDesktopServices.openUrl(QUrl(self._current_standard_link())):
+            return
+        MessageBox("提示", "无法打开链接，请检查系统默认浏览器设置。", self.window()).exec()
+
     def _clear_links(self) -> None:
         if self.is_running():
             MessageBox("提示", "任务正在运行，请先停止任务。", self.window()).exec()
             return
         self.url_edit.clear()
         self.table.setRowCount(0)
-        self.row_by_video_id.clear()
+        self.row_by_media_id.clear()
         self._on_batch_progress(0, 0, 0)
         self.status_label.setText("就绪")
+
+    def _toggle_right_panel(self) -> None:
+        self.right_panel_animation.stop()
+        start_width = self.right_panel.width()
+        self.right_panel_expanded = not self.right_panel_expanded
+        if self.right_panel_expanded:
+            self.right_panel.setVisible(True)
+            self.right_panel_toggle.setIcon(FIF.CARE_RIGHT_SOLID)
+            self.right_panel_toggle.setToolTip("收起右侧面板")
+            target_width = 400
+        else:
+            self.right_panel_toggle.setIcon(FIF.CARE_LEFT_SOLID)
+            self.right_panel_toggle.setToolTip("展开右侧面板")
+            target_width = 0
+        self.right_panel_animation.setStartValue(start_width)
+        self.right_panel_animation.setEndValue(target_width)
+        self.right_panel_animation.start()
+
+    def _on_right_panel_animation_finished(self) -> None:
+        if not self.right_panel_expanded:
+            self.right_panel.setVisible(False)
 
     def _start_download(self) -> None:
         if self.is_running():
             return
-        links = extract_douyin_video_links(self.url_edit.toPlainText())
+        links = self._current_links()
         if not links:
-            MessageBox("提示", "没有检测到可下载的视频链接。", self.window()).exec()
+            media_name = "视频" if self.current_download_type == DOUYIN_VIDEO_DOWNLOAD else "音频"
+            MessageBox("提示", f"没有检测到可下载的抖音{media_name}直链。", self.window()).exec()
             return
 
         save_dir = Path(self.config.save_dir)
@@ -247,16 +439,14 @@ class DouyinVideoPage(QWidget):
 
         self._populate_tasks(links)
         self._save_config()
-        self._write_log(f"开始下载，共 {len(links)} 个视频，并发 {self.config.concurrency}。")
         self._on_batch_progress(0, len(links), 0)
 
-        self.worker = DouyinVideoWorkerThread(
+        self.worker = DouyinMediaWorkerThread(
             links=links,
             save_dir=str(save_dir),
             concurrency=self.config.concurrency,
             parent=self,
         )
-        self.worker.log.connect(self._on_log)
         self.worker.status.connect(self.status_label.setText)
         self.worker.task_progress.connect(self._on_task_progress)
         self.worker.task_status.connect(self._on_task_status)
@@ -265,13 +455,13 @@ class DouyinVideoPage(QWidget):
         self.worker.start()
         self._set_running_state(True)
 
-    def _populate_tasks(self, links: list[DouyinVideoLink]) -> None:
+    def _populate_tasks(self, links: list[DouyinMediaLink]) -> None:
         self.table.setUpdatesEnabled(False)
         self.table.setRowCount(len(links))
-        self.row_by_video_id.clear()
+        self.row_by_media_id.clear()
         for row, link in enumerate(links):
-            self.row_by_video_id[link.video_id] = row
-            id_item = QTableWidgetItem(link.video_id)
+            self.row_by_media_id[link.task_id] = row
+            id_item = QTableWidgetItem(link.task_id)
             progress_item = QTableWidgetItem("0%")
             progress_item.setTextAlignment(Qt.AlignCenter)
             status_item = QTableWidgetItem("等待中")
@@ -281,8 +471,8 @@ class DouyinVideoPage(QWidget):
             self.table.setItem(row, 2, status_item)
         self.table.setUpdatesEnabled(True)
 
-    def _on_task_progress(self, video_id: str, downloaded: int, total: int) -> None:
-        row = self.row_by_video_id.get(video_id)
+    def _on_task_progress(self, task_id: str, downloaded: int, total: int) -> None:
+        row = self.row_by_media_id.get(task_id)
         if row is None:
             return
         progress_item = self.table.item(row, 1)
@@ -293,8 +483,8 @@ class DouyinVideoPage(QWidget):
         else:
             progress_item.setText(f"{downloaded / 1024 / 1024:.1f} MB")
 
-    def _on_task_status(self, video_id: str, status: str, detail: str) -> None:
-        row = self.row_by_video_id.get(video_id)
+    def _on_task_status(self, task_id: str, status: str, detail: str) -> None:
+        row = self.row_by_media_id.get(task_id)
         if row is None:
             return
         status_item = self.table.item(row, 2)
@@ -316,14 +506,6 @@ class DouyinVideoPage(QWidget):
         if window and total:
             window.setWindowTitle(f"BBDown - 抖音下载 {processed}/{total}")
 
-    def _on_log(self, level: str, message: str) -> None:
-        self._write_log(f"[{level.upper()}] {message}")
-
-    def _write_log(self, message: str) -> None:
-        LOG_DIR.mkdir(parents=True, exist_ok=True)
-        with (LOG_DIR / "douyin_video_download.log").open("a", encoding="utf-8") as output:
-            output.write(message + "\n")
-
     def _on_finished(self, result: object) -> None:
         assert isinstance(result, DouyinVideoBatchResult)
         self.worker = None
@@ -337,7 +519,6 @@ class DouyinVideoPage(QWidget):
         else:
             summary = f"下载结束：成功 {result.completed}，已存在 {result.skipped}，失败 {result.failed}。"
         self.status_label.setText(summary)
-        self._write_log(summary)
 
     def _set_running_state(self, running: bool) -> None:
         self.start_btn.setEnabled(not running)
@@ -346,6 +527,7 @@ class DouyinVideoPage(QWidget):
         self.url_edit.setReadOnly(running)
         self.choose_dir_btn.setEnabled(not running)
         self.concurrency_combo.setEnabled(not running)
+        self.download_type_segment.setEnabled(not running)
         self.clear_btn.setEnabled(not running)
 
     def stop(self) -> None:

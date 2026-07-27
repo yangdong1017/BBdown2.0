@@ -15,6 +15,22 @@ class DouyinVideoLink:
     video_id: str
     url: str
 
+    @property
+    def task_id(self) -> str:
+        return self.video_id
+
+    @property
+    def file_suffix(self) -> str:
+        return ".mp4"
+
+    @property
+    def content_prefix(self) -> str:
+        return "video/"
+
+    @property
+    def media_label(self) -> str:
+        return "视频"
+
 
 def extract_douyin_video_links(text: str) -> list[DouyinVideoLink]:
     """Extract supported play URLs from arbitrary pasted text and deduplicate by video ID."""

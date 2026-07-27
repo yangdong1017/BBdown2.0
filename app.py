@@ -7,7 +7,8 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QApplication, QDialog
 from qfluentwidgets import Theme, setTheme, setThemeColor
 
-from core.config import APP_ROOT, LICENSE_REQUIRED, RESOURCE_ROOT, ensure_dirs
+from core.config import APP_ROOT, LICENSE_REQUIRED, RESOURCE_ROOT, RUNTIME_DIR, ensure_dirs
+from core.crash_guard import install_crash_guard
 from core.license_service import LicenseService
 from core.toolchain import resolve_toolchain
 from ui.license_dialog import LicenseDialog
@@ -22,15 +23,6 @@ if sys.platform == "win32":
 
 def main(argv: list[str] | None = None) -> int:
     argv = argv if argv is not None else sys.argv
-    trace_path = APP_ROOT / "startup_trace.log"
-
-    def trace(message: str) -> None:
-        try:
-            ensure_dirs()
-            with trace_path.open("a", encoding="utf-8") as fh:
-                fh.write(message + "\n")
-        except Exception:
-            pass
 
     if "--self-test" in argv:
         ensure_dirs()
@@ -43,37 +35,26 @@ def main(argv: list[str] | None = None) -> int:
         print(toolchain.aria2c)
         return 0
 
-    trace("main:start")
     ensure_dirs()
-    trace("main:dirs_ready")
+    install_crash_guard(RUNTIME_DIR)
     QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling)
     QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps)
-    trace("main:qt_attrs_set")
     app = QApplication(argv)
-    trace("main:qapp_created")
     setTheme(Theme.DARK)
     setThemeColor("#4cc2ff")
-    trace("main:theme_set")
 
     if LICENSE_REQUIRED:
-        trace("main:license_check_start")
         license_service = LicenseService()
         license_result = license_service.verify(force=True)
         if not license_result.ok:
             dialog = LicenseDialog(license_service)
             if dialog.exec() != QDialog.Accepted:
-                trace("main:license_rejected")
                 return 0
-        trace("main:license_ready")
 
     window = MainWindow()
-    trace("main:window_created")
     window.show()
-    trace("main:window_shown")
-    result = app.exec()
-    trace(f"main:app_exec_returned:{result}")
-    return result
+    return app.exec()
 
 
 if __name__ == "__main__":
