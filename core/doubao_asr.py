@@ -18,7 +18,6 @@ RESOURCE_ID = "volc.seedasr.auc"
 TEST_AUDIO_URL = "https://lf26-music-east.douyinstatic.com/obj/ies-music-hj/7546439142222302011.mp3"
 
 # 3.1 起不再内置豆包 API Key。正式设置页落地后从本机配置读取。
-DOUBAO_API_KEY = ""
 
 SUCCESS_CODE = "20000000"
 PROCESSING_CODES = {"20000001", "20000002"}
@@ -251,7 +250,7 @@ def _extract_text(data: dict[str, Any]) -> str:
 
 
 def _get_api_key() -> str:
-    api_key = load_doubao_api_key() or DOUBAO_API_KEY.strip()
+    api_key = load_doubao_api_key()
     if not api_key:
         raise DoubaoASRError("未配置豆包 API Key，请先到设置页填写。")
     return api_key

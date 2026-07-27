@@ -13,7 +13,7 @@ from PyQt5.QtWidgets import QApplication
 from core.asr_file_worker import ASRWorkerThread
 from core.bilibili_workers import DownloadWorkerThread, LoginWorkerThread
 from core.douyin_video_urls import DouyinVideoLink
-from core.douyin_video_worker import DouyinVideoWorkerThread
+from core.douyin_video_worker import DouyinMediaWorkerThread
 from core.models import Toolchain
 from core.url_asr_worker import UrlASRWorkerThread
 
@@ -53,7 +53,7 @@ class WorkerCompletionTests(unittest.TestCase):
                 root,
                 "utf-8",
             )
-            douyin = DouyinVideoWorkerThread(
+            douyin = DouyinMediaWorkerThread(
                 [DouyinVideoLink("video-id", "https://example.com/video.mp4")],
                 directory,
                 5,

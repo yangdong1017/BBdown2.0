@@ -203,7 +203,3 @@ class DouyinMediaWorkerThread(QThread):
             self.status.emit(f"正在停止 | 已处理 {processed}/{total} | 进行中 {active}")
         else:
             self.status.emit(f"下载中 {processed}/{total} | 进行中 {active} | 并发 {self.concurrency}")
-
-
-# Backward-compatible name for existing imports.
-DouyinVideoWorkerThread = DouyinMediaWorkerThread

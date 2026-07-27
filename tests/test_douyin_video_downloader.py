@@ -8,7 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from core.douyin_audio_urls import DouyinAudioLink
-from core.douyin_video_downloader import DouyinMediaDownloader, DouyinVideoDownloader
+from core.douyin_video_downloader import DouyinMediaDownloader
 from core.douyin_video_urls import DouyinVideoLink
 
 
@@ -74,7 +74,7 @@ class DouyinVideoDownloaderTests(unittest.TestCase):
 
     def test_downloads_video_through_redirect_and_skips_existing_file(self) -> None:
         progress: list[tuple[str, int, int]] = []
-        downloader = DouyinVideoDownloader(threading.Event(), lambda *args: progress.append(args))
+        downloader = DouyinMediaDownloader(threading.Event(), lambda *args: progress.append(args))
         link = DouyinVideoLink(video_id="test_video", url=f"{self.base_url}/play")
 
         with tempfile.TemporaryDirectory() as directory:
@@ -90,7 +90,7 @@ class DouyinVideoDownloaderTests(unittest.TestCase):
             self.assertEqual(existing.status, "exists")
 
     def test_reports_expired_link_without_partial_file(self) -> None:
-        downloader = DouyinVideoDownloader(threading.Event(), lambda *_args: None)
+        downloader = DouyinMediaDownloader(threading.Event(), lambda *_args: None)
         link = DouyinVideoLink(video_id="missing", url=f"{self.base_url}/missing")
 
         with tempfile.TemporaryDirectory() as directory:
@@ -127,7 +127,7 @@ class DouyinVideoDownloaderTests(unittest.TestCase):
     def test_honors_stop_before_starting(self) -> None:
         stop_event = threading.Event()
         stop_event.set()
-        downloader = DouyinVideoDownloader(stop_event, lambda *_args: None)
+        downloader = DouyinMediaDownloader(stop_event, lambda *_args: None)
         link = DouyinVideoLink(video_id="stopped", url=f"{self.base_url}/play")
 
         with tempfile.TemporaryDirectory() as directory:
@@ -139,7 +139,7 @@ class DouyinVideoDownloaderTests(unittest.TestCase):
     def test_stops_active_download_and_removes_partial_file(self) -> None:
         first_progress = threading.Event()
         stop_event = threading.Event()
-        downloader = DouyinVideoDownloader(
+        downloader = DouyinMediaDownloader(
             stop_event,
             lambda _video_id, downloaded, _total: first_progress.set() if downloaded else None,
         )

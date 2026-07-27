@@ -254,9 +254,3 @@ def _file_error_message(exc: OSError, media_label: str) -> str:
     if exc.errno == errno.ENOSPC:
         return "磁盘空间不足"
     return f"保存{media_label}失败"
-
-
-# Backward-compatible names for existing imports and tests.
-DouyinVideoDownloadResult = DouyinMediaDownloadResult
-DouyinVideoDownloader = DouyinMediaDownloader
-VideoDownloadError = MediaDownloadError

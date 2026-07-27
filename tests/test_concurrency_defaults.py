@@ -16,7 +16,7 @@ from core.config import (
     MIN_CONCURRENCY,
     THREAD_OPTIONS,
 )
-from core.douyin_video_worker import DouyinVideoWorkerThread
+from core.douyin_video_worker import DouyinMediaWorkerThread
 from core.models import Toolchain
 from core.url_asr_worker import UrlASRWorkerThread
 
@@ -35,7 +35,7 @@ class ConcurrencyDefaultsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             bilibili = DownloadWorkerThread([], directory, 1, Toolchain(), root, "utf-8")
-            douyin = DouyinVideoWorkerThread([], directory, 1)
+            douyin = DouyinMediaWorkerThread([], directory, 1)
             local_asr = ASRWorkerThread([], "必剪", "txt", 1, directory, None)
             url_asr = UrlASRWorkerThread([], "必剪", "txt", 1, directory)
 

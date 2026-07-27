@@ -14,7 +14,6 @@ from core.config import (
     ASR_MODE_OPTIONS,
     DOUBAO_ENGINE_NAME,
     DOUBAO_ASR_CONCURRENCY_OPTIONS,
-    LOCAL_FILE_ASR_ENGINE_OPTIONS,
     load_doubao_api_key,
     load_app_config,
     update_app_config,
@@ -133,7 +132,7 @@ class ASRPage(QWidget):
     def _apply_state(self) -> None:
         self.mode_combo.setCurrentText(self.config.asr_mode)
         self._on_mode_changed(self.mode_combo.currentText())
-        if self.config.asr_engine in self._current_engine_options():
+        if self.config.asr_engine in ASR_ENGINE_OPTIONS:
             self.engine_combo.setCurrentText(self.config.asr_engine)
         self.format_combo.setCurrentText(self.config.asr_format)
         self.concurrency_combo.setCurrentText(str(self.config.asr_concurrency))
@@ -157,24 +156,20 @@ class ASRPage(QWidget):
 
     def _on_mode_changed(self, mode: str) -> None:
         is_douyin = mode == DOUYIN_ASR_MODE
-        self._sync_engine_options(mode)
+        self._sync_engine_options()
         self.local_input.setVisible(not is_douyin)
         self.url_input.setVisible(is_douyin)
         self.config.asr_mode = mode
         self._refresh_out_label()
 
-    def _current_engine_options(self) -> tuple[str, ...]:
-        if self._is_douyin_mode():
-            return ASR_ENGINE_OPTIONS
-        return LOCAL_FILE_ASR_ENGINE_OPTIONS
-
-    def _sync_engine_options(self, mode: str) -> None:
-        options = ASR_ENGINE_OPTIONS if mode == DOUYIN_ASR_MODE else LOCAL_FILE_ASR_ENGINE_OPTIONS
+    def _sync_engine_options(self) -> None:
         current = self.engine_combo.currentText() or self.config.asr_engine
         self.engine_combo.blockSignals(True)
         self.engine_combo.clear()
-        self.engine_combo.addItems(list(options))
-        self.engine_combo.setCurrentText(current if current in options else options[0])
+        self.engine_combo.addItems(list(ASR_ENGINE_OPTIONS))
+        self.engine_combo.setCurrentText(
+            current if current in ASR_ENGINE_OPTIONS else ASR_ENGINE_OPTIONS[0]
+        )
         self.engine_combo.blockSignals(False)
         self._on_engine_changed(self.engine_combo.currentText())
 
