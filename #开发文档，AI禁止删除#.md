@@ -61,13 +61,13 @@ README 中的版本号
 Release 文件名
 ```
 
-例如 4.0：
+例如 4.1：
 
 ```text
-BBDown 4.0
-BBDown-4.0.exe
-BBDown-4.0.zip
-v4.0
+BBDown 4.1
+BBDown-4.1.exe
+BBDown-4.1.zip
+v4.1
 ```
 
 ## 打包流程
@@ -81,15 +81,15 @@ python -m PyInstaller build_bbdown_launcher.spec --noconfirm --clean
 生成解压版：
 
 ```powershell
-New-Item -ItemType Directory -Force -Path .\release_assets\v4.0
-Compress-Archive -Path .\dist\BBDown -DestinationPath .\release_assets\v4.0\BBDown-4.0.zip -Force
+New-Item -ItemType Directory -Force -Path .\release_assets\v4.1
+Compress-Archive -Path .\dist\BBDown -DestinationPath .\release_assets\v4.1\BBDown-4.1.zip -Force
 ```
 
 生成安装包：
 
 ```powershell
 & "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" .\installer.iss
-Copy-Item .\installer_output\BBDown-4.0.exe .\release_assets\v4.0\BBDown-4.0.exe -Force
+Copy-Item .\installer_output\BBDown-4.1.exe .\release_assets\v4.1\BBDown-4.1.exe -Force
 ```
 
 ## GitHub Release 习惯
@@ -97,8 +97,8 @@ Copy-Item .\installer_output\BBDown-4.0.exe .\release_assets\v4.0\BBDown-4.0.exe
 Release 上传两个文件：
 
 ```text
-BBDown-4.0.exe
-BBDown-4.0.zip
+BBDown-4.1.exe
+BBDown-4.1.zip
 ```
 
 不要把 `dist/`、`installer_output/`、`release_assets/` 提交到 Git 仓库。
@@ -129,7 +129,30 @@ AI 修改本项目时必须遵守：
 8. 如果用户说“整理文件夹”，只清缓存和非必要产物，不动源码和私有配置。
 9. 最终回复要说清楚改了什么、测试了什么、还有什么没做。
 
-## 当前 4.0 关键变化
+## 当前 4.1 关键变化
+
+4.1 没有新增功能，是一次稳定性和结构整理。
+
+1. 新增全局异常兜底 `core/crash_guard.py`。未捕获异常写入
+   `bbdown_runtime/bbdown.log` 并弹一次性提示，程序不再直接退出。
+2. 关闭窗口最多等待 10 秒，不会被慢网络请求卡住。
+3. 打包版不再读取 `BBDOWN_LICENSE_REQUIRED` / `BBDOWN_LICENSE_API_URL`，
+   只有开发态可以覆盖。这两个变量原本可以零门槛绕过卡密校验。
+4. 机器码只认 Windows MachineGuid，换网卡、插扩展坞、改电脑名不再掉授权。
+   旧机器码仍然认，匹配到就替换成新的，设备名额不增加。
+   **兼容逻辑要保留一到两个版本再拆掉**，`MACHINE_ID_SALT` 永远不要改。
+5. B站页输入加 350ms 防抖，不再每敲一个键重写一次配置文件。
+6. 抖音下载整批共用一个连接池；进度信号聚合成 5Hz 整批下发。
+7. 报错话术收口：只有 `core/errors.py::UserFacingError` 和已知网络/磁盘异常
+   会显示原文，其余一律显示"处理失败，请重试。"，真实异常写日志。
+   **新增会抛给用户看的异常时，记得继承 UserFacingError。**
+8. 停止任务后的摘要补上"已停止/未处理"计数，各项相加等于总数。
+9. 三个页面共用 `ui/platform_utils.py`、`ui/collapsible_panel.py`、
+   `ui/task_table.py`、`ui/window_title.py`、`core/links.py`、`core/atomic_io.py`。
+   **改这些行为时改一处即可，不要再各页面复制。**
+10. 任务结束后窗口标题统一复位。
+
+## 4.0 关键变化
 
 1. 豆包 API Key 不再内置。
 2. 左下角新增“设置”入口。

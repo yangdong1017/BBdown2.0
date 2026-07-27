@@ -1,6 +1,6 @@
-﻿# BBDown4.0
+﻿# BBDown4.1
 
-BBDown4.0 是一个 Windows 桌面工具，用来降低批量处理视频、音频素材的操作成本。
+BBDown4.1 是一个 Windows 桌面工具，用来降低批量处理视频、音频素材的操作成本。
 
 它支持 B站链接批量下载音频、抖音视频直链批量下载，也支持将抖音音频链接、本地音频、本地视频批量转写为文字，适合整理口播文案、字幕文本和音频内容。
 
@@ -47,7 +47,7 @@ BBDown4.0 是一个 Windows 桌面工具，用来降低批量处理视频、音�
 前往 Releases 下载：
 
 ```text
-BBDown-4.0.exe
+BBDown-4.1.exe
 ```
 
 双击安装包，按照提示安装即可。
@@ -57,7 +57,7 @@ BBDown-4.0.exe
 前往 Releases 下载：
 
 ```text
-BBDown-4.0.zip
+BBDown-4.1.zip
 ```
 
 使用方法：
@@ -90,7 +90,7 @@ run_source.bat
 ## 项目结构
 
 ```text
-BBDown4.0/
+BBDown4.1/
 ├─ app.py
 ├─ core/                         # 下载、配置、任务调度、转写服务
 │  ├─ asr_service.py              # ASR 接口封装
@@ -151,7 +151,7 @@ installer_output\
 
 ## 卡密维护
 
-4.0 保留卡密激活逻辑，默认开启强制校验。
+4.1 保留卡密激活逻辑，默认开启强制校验。
 
 本版本采用本地 EXE 直连飞书 Base 的方式。先复制模板：
 
@@ -195,8 +195,8 @@ installer.iss
 
 ```powershell
 .\.venv\Scripts\python.exe -m PyInstaller build_bbdown_launcher.spec --noconfirm --clean
-New-Item -ItemType Directory -Force -Path .\release_assets\v4.0
-Compress-Archive -Path .\dist\BBDown -DestinationPath .\release_assets\v4.0\BBDown-4.0.zip -Force
+New-Item -ItemType Directory -Force -Path .\release_assets\v4.1
+Compress-Archive -Path .\dist\BBDown -DestinationPath .\release_assets\v4.1\BBDown-4.1.zip -Force
 ```
 
 3. 生成安装包：
@@ -214,15 +214,15 @@ ISCC.exe installer.iss
 生成文件：
 
 ```text
-installer_output\BBDown-4.0.exe
+installer_output\BBDown-4.1.exe
 ```
 
 4. 先测试本地产物：
 
 ```text
 dist\BBDown\BBDown.exe
-release_assets\v4.0\BBDown-4.0.zip
-installer_output\BBDown-4.0.exe
+release_assets\v4.1\BBDown-4.1.zip
+installer_output\BBDown-4.1.exe
 ```
 
 5. 测试无误后，再创建 GitHub Release 并上传安装包和解压包。
