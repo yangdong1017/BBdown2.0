@@ -9,6 +9,8 @@ from typing import BinaryIO
 
 import requests
 
+from .errors import UserFacingError
+
 
 TOS_PUBLIC_BASE_URL = "https://bbdown.tos-cn-beijing.volces.com"
 TOS_TEMP_PREFIX = "asr-temp"
@@ -19,7 +21,7 @@ TOS_UPLOAD_SUCCESS_STATUS = {200, 201, 204}
 TOS_DELETE_SUCCESS_STATUS = {200, 202, 204, 404}
 
 
-class TOSStorageError(RuntimeError):
+class TOSStorageError(UserFacingError):
     pass
 
 

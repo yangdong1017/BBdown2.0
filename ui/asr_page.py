@@ -24,6 +24,7 @@ from core.url_asr_worker import UrlASRBatchResult, UrlASRWorkerThread, default_u
 from core.url_audio import extract_audio_urls, extract_douyin_share_urls
 from .asr_inputs import LocalFileInput, UrlInput
 from .platform_utils import open_directory
+from .window_title import set_task_title
 
 DOUYIN_ASR_MODE = "抖音音频链接转文字"
 
@@ -331,17 +332,13 @@ class ASRPage(QWidget):
     def _on_count(self, ok: int, skip: int, fail: int, total: int, filename: str) -> None:
         done = ok + skip + fail
         self._set_asr_progress(done, total)
-        window = self.window()
-        if window:
-            window.setWindowTitle(f"BBDown - 转文字 {done}/{total}")
+        set_task_title(self, f"转文字 {done}/{total}")
 
     def _on_finished(self, summary: str) -> None:
         self.status_label.setText(summary)
         self.start_btn.setEnabled(True)
         self.start_btn.setText("开始转文字")
-        window = self.window()
-        if window:
-            window.setWindowTitle(f"BBDown - {summary}")
+        set_task_title(self)
         self.worker = None
 
     def _on_url_progress(self, index: int, url: str, status: str, message: str) -> None:
@@ -357,9 +354,7 @@ class ASRPage(QWidget):
     def _on_url_count(self, ok: int, skip: int, fail: int, total: int, filename: str) -> None:
         done = ok + skip + fail
         self._set_asr_progress(done, total)
-        window = self.window()
-        if window:
-            window.setWindowTitle(f"BBDown - 音频转文字 {done}/{total}")
+        set_task_title(self, f"音频转文字 {done}/{total}")
 
     def _set_asr_progress(self, done: int, total: int) -> None:
         percent = int(done * 100 / total) if total else 0
@@ -377,9 +372,7 @@ class ASRPage(QWidget):
         self.url_input.set_running(False)
         self.start_btn.setEnabled(True)
         self.start_btn.setText("开始转文字")
-        window = self.window()
-        if window:
-            window.setWindowTitle(f"BBDown - {result.summary}")
+        set_task_title(self)
         self.url_worker = None
 
     def dragEnterEvent(self, event) -> None:  # type: ignore[override]

@@ -12,6 +12,7 @@ import requests
 
 from .config import DOUYIN_VIDEO_CHUNK_SIZE, DOUYIN_VIDEO_RETRY_COUNT, DOUYIN_VIDEO_TIMEOUT
 from .douyin_media import DouyinMediaLink
+from .errors import UserFacingError
 
 
 MEDIA_HEADERS = {
@@ -38,7 +39,7 @@ class DouyinMediaDownloadResult:
     message: str = ""
 
 
-class MediaDownloadError(RuntimeError):
+class MediaDownloadError(UserFacingError):
     def __init__(self, message: str, *, retryable: bool) -> None:
         super().__init__(message)
         self.retryable = retryable

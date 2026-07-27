@@ -28,7 +28,6 @@ from core.config import (
     DOUYIN_AUDIO_DOWNLOAD,
     DOUYIN_VIDEO_DOWNLOAD,
     DOUYIN_VIDEO_CONCURRENCY_OPTIONS,
-    WINDOW_TITLE,
     load_douyin_video_config,
     save_douyin_video_config,
 )
@@ -40,6 +39,7 @@ from core.models import DouyinVideoBatchResult
 from .collapsible_panel import CollapsibleRightPanel
 from .platform_utils import open_directory
 from .task_table import TaskTable
+from .window_title import set_task_title
 from .widgets import CardFrame, TEXT_EDIT_STYLE
 
 
@@ -418,15 +418,14 @@ class DouyinVideoPage(QWidget):
         percent = int(processed * 100 / total) if total else 0
         self.progress_bar.setValue(percent)
         self.progress_label.setText(f"进度 {processed}/{total} | {percent}% | 进行中 {active}")
-        window = self.window()
-        if window and total:
-            window.setWindowTitle(f"BBDown - 抖音下载 {processed}/{total}")
+        if total:
+            set_task_title(self, f"抖音下载 {processed}/{total}")
 
     def _on_finished(self, result: object) -> None:
         assert isinstance(result, DouyinVideoBatchResult)
         self.worker = None
         self._set_running_state(False)
-        self.window().setWindowTitle(WINDOW_TITLE)
+        set_task_title(self)
         if result.stopped:
             summary = (
                 f"任务已停止：完成 {result.completed}，已存在 {result.skipped}，"

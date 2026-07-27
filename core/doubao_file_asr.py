@@ -8,6 +8,8 @@ from core.atomic_io import write_text_atomic
 from core.doubao_asr import transcribe_doubao_url
 from core.tos_public_storage import PublicTOSObject, PublicTOSStorage
 
+from .errors import UserFacingError
+
 
 MEDIA_CONTENT_TYPES = {
     ".mp3": "audio/mpeg",
@@ -29,7 +31,7 @@ MEDIA_CONTENT_TYPES = {
 }
 
 
-class DoubaoFileASRError(RuntimeError):
+class DoubaoFileASRError(UserFacingError):
     pass
 
 

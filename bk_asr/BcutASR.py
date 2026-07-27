@@ -10,6 +10,8 @@ import requests
 from .ASRData import ASRData, ASRDataSeg
 from .BaseASR import BaseASR
 
+from core.errors import UserFacingError
+
 
 __version__ = "0.0.3"
 
@@ -65,7 +67,7 @@ class BcutASR(BaseASR):
         """申请上传"""
         self._check_stopped()
         if not self.file_binary:
-            raise ValueError("none set data")
+            raise UserFacingError("没有可识别的音频内容。")
         payload = json.dumps({
             "type": 2,
             "name": "audio.mp3",
@@ -166,12 +168,13 @@ class BcutASR(BaseASR):
         try:
             resp.raise_for_status()
         except requests.HTTPError as exc:
-            raise RuntimeError(f"必剪识别服务返回 HTTP {resp.status_code}，请稍后重试。") from exc
+            raise UserFacingError(f"必剪识别服务返回 HTTP {resp.status_code}，请稍后重试。") from exc
 
         payload = resp.json()
         if payload.get("code", 0) not in (0, "0"):
-            message = payload.get("message") or payload.get("msg") or payload.get("code")
-            raise RuntimeError(f"必剪识别服务返回错误：{message}")
+            # The raw API text is not written for end users; log it, show a plain line.
+            logging.error("必剪接口返回错误: %s", payload.get("message") or payload.get("msg") or payload.get("code"))
+            raise UserFacingError("必剪识别服务返回错误，请稍后重试或换一个识别接口。")
         return payload["data"]
 
     def _run(self):
@@ -185,19 +188,19 @@ class BcutASR(BaseASR):
             if state == 4:
                 break
             if state in (5, 6):
-                raise RuntimeError("必剪识别任务失败，请换一个 ASR 接口或稍后重试。")
+                raise UserFacingError("必剪识别任务失败，请换一个 ASR 接口或稍后重试。")
             self._wait_or_stop(min(1 + attempt // 30, 5))
         else:
-            raise TimeoutError("必剪识别等待超时，请稍后重试或降低并发。")
+            raise UserFacingError("必剪识别等待超时，请稍后重试或降低并发。")
 
         if not task_resp or not task_resp.get("result"):
-            raise RuntimeError("必剪识别完成但没有返回文字结果，请换一个 ASR 接口重试。")
+            raise UserFacingError("必剪识别完成但没有返回文字结果，请换一个 ASR 接口重试。")
         logging.info(f"转换成功")
         return json.loads(task_resp["result"])
 
     def _check_stopped(self) -> None:
         if self.stopped and self.stopped():
-            raise RuntimeError("已停止")
+            raise UserFacingError("已停止")
 
     def _wait_or_stop(self, seconds: float) -> None:
         deadline = time.monotonic() + seconds

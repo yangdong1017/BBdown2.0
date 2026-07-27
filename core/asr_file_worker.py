@@ -79,7 +79,7 @@ class ASRWorkerThread(QThread):
 
     def _run_batch(self) -> str:
         total = len(self.files)
-        ok = skip = fail = 0
+        ok = skip = fail = untouched = 0
         processed_indices: set[int] = set()
         started = time.time()
 
@@ -98,6 +98,7 @@ class ASRWorkerThread(QThread):
                 skip += 1
                 self.file_status.emit(result.index, "跳过")
             elif result.status == "stopped":
+                untouched += 1
                 self.file_status.emit(result.index, "未处理")
             else:
                 fail += 1
@@ -108,8 +109,13 @@ class ASRWorkerThread(QThread):
         if self.stop_flag.is_set():
             for index in range(total):
                 if index not in processed_indices:
+                    untouched += 1
                     self.file_status.emit(index, "未处理")
 
         minutes, seconds = divmod(int(time.time() - started), 60)
-        prefix = "已停止" if self.stop_flag.is_set() else "完成"
-        return f"{prefix}: 成功 {ok} 跳过 {skip} 失败 {fail} | 耗时 {minutes:02d}:{seconds:02d}"
+        elapsed = f"耗时 {minutes:02d}:{seconds:02d}"
+        if self.stop_flag.is_set():
+            # Without this the numbers do not add up to the total and the user
+            # thinks files went missing.
+            return f"已停止: 成功 {ok} 跳过 {skip} 失败 {fail} 未处理 {untouched} | {elapsed}"
+        return f"完成: 成功 {ok} 跳过 {skip} 失败 {fail} | {elapsed}"

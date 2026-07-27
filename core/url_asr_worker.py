@@ -24,6 +24,7 @@ class UrlASRBatchResult:
     ok: int = 0
     skip: int = 0
     fail: int = 0
+    stopped_count: int = 0
     total: int = 0
 
 
@@ -107,7 +108,7 @@ class UrlASRWorkerThread(QThread):
 
     def _run_batch(self) -> UrlASRBatchResult:
         total = len(self.urls)
-        ok = skip = fail = 0
+        ok = skip = fail = stopped_count = 0
         failed_urls: list[str] = []
         processed_indices: set[int] = set()
         started = time.time()
@@ -126,6 +127,7 @@ class UrlASRWorkerThread(QThread):
             elif result.status == "skip":
                 skip += 1
             elif result.status == "stopped":
+                stopped_count += 1
                 failed_urls.append(result.source)
             else:
                 fail += 1
@@ -136,13 +138,19 @@ class UrlASRWorkerThread(QThread):
         if self.stop_flag.is_set():
             for index, url in enumerate(self.urls):
                 if index not in processed_indices:
+                    stopped_count += 1
                     failed_urls.append(url)
                     self.task_status.emit(index, "已停止")
 
         minutes, seconds = divmod(int(time.time() - started), 60)
         stopped = self.stop_flag.is_set()
-        prefix = "已停止" if stopped else "完成"
-        summary = f"{prefix}: 成功 {ok} 跳过 {skip} 失败 {fail} | 耗时 {minutes:02d}:{seconds:02d}"
+        elapsed = f"耗时 {minutes:02d}:{seconds:02d}"
+        if stopped:
+            # Without this the numbers do not add up to the total and the user
+            # thinks links went missing.
+            summary = f"已停止: 成功 {ok} 跳过 {skip} 失败 {fail} 已停止 {stopped_count} | {elapsed}"
+        else:
+            summary = f"完成: 成功 {ok} 跳过 {skip} 失败 {fail} | {elapsed}"
         return UrlASRBatchResult(
             summary=summary,
             output_dir=str(self.out_dir),
@@ -151,5 +159,6 @@ class UrlASRWorkerThread(QThread):
             ok=ok,
             skip=skip,
             fail=fail,
+            stopped_count=stopped_count,
             total=total,
         )

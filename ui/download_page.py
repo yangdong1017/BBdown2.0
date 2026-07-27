@@ -44,6 +44,7 @@ from .bilibili_login_panel import BilibiliLoginPanel
 from .collapsible_panel import CollapsibleRightPanel
 from .platform_utils import open_directory
 from .task_table import TaskTable
+from .window_title import set_task_title
 from .widgets import CardFrame, TEXT_EDIT_STYLE
 
 
@@ -400,9 +401,8 @@ class DownloadPage(QWidget):
         percent = int(completed * 100 / total) if total else 0
         self.progress_bar.setValue(percent)
         self.progress_label.setText(f"进度 {completed}/{total} | {percent}% | 进行中 {active}")
-        window = self.window()
-        if window and total:
-            window.setWindowTitle(f"BBDown - B站下载 {completed}/{total}")
+        if total:
+            set_task_title(self, f"B站下载 {completed}/{total}")
 
     def _populate_tasks(self, urls: list[str]) -> None:
         self.table.populate([bilibili_display_id(url) for url in urls])
@@ -417,6 +417,7 @@ class DownloadPage(QWidget):
         assert isinstance(result, DownloadBatchResult)
         self.download_worker = None
         self._set_running_state(False)
+        set_task_title(self)
         if result.stopped:
             self._set_status(f"批量任务已停止，已完成 {result.completed}/{result.total}")
             return

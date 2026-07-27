@@ -1,13 +1,20 @@
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from PyQt5.QtWidgets import QApplication, QWidget
+
 from core.atomic_io import write_text_atomic
+from core.config import WINDOW_TITLE
 from core.links import dedupe, is_douyin_cdn_host, iter_urls
 from ui.platform_utils import open_directory
+from ui.window_title import set_task_title
 
 
 class LinkHelperTests(unittest.TestCase):
@@ -107,6 +114,26 @@ class OpenDirectoryTests(unittest.TestCase):
             with patch("ui.platform_utils.sys.platform", "linux"):
                 with patch("ui.platform_utils.subprocess.Popen", side_effect=OSError):
                     self.assertFalse(open_directory(directory))
+
+
+class WindowTitleTests(unittest.TestCase):
+    """The title bar must not stay stuck on a job that already ended."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_progress_is_shown_and_then_restored(self) -> None:
+        window = QWidget()
+        window.setWindowTitle(WINDOW_TITLE)
+        page = QWidget(window)
+        self.addCleanup(window.deleteLater)
+
+        set_task_title(page, "B站下载 3/12")
+        self.assertEqual(window.windowTitle(), "BBDown - B站下载 3/12")
+
+        set_task_title(page)
+        self.assertEqual(window.windowTitle(), WINDOW_TITLE)
 
 
 if __name__ == "__main__":

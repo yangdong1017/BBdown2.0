@@ -7,6 +7,7 @@ from urllib.parse import unquote, urlparse
 
 import requests
 
+from .errors import UserFacingError
 from .links import AUDIO_SUFFIXES, dedupe, is_douyin_cdn_host, iter_urls
 
 
@@ -42,7 +43,7 @@ DEFAULT_HEADERS = {
 }
 
 
-class AudioUrlError(RuntimeError):
+class AudioUrlError(UserFacingError):
     pass
 
 

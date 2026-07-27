@@ -11,6 +11,8 @@ import requests
 from core.config import APP_VERSION, load_doubao_api_key
 from core.url_audio import infer_doubao_direct_format
 
+from .errors import UserFacingError
+
 
 SUBMIT_URL = "https://openspeech.bytedance.com/api/v3/auc/bigmodel/submit"
 QUERY_URL = "https://openspeech.bytedance.com/api/v3/auc/bigmodel/query"
@@ -26,7 +28,7 @@ HTTP_MAX_ATTEMPTS = 3
 RETRYABLE_HTTP_STATUS = {429, 500, 502, 503, 504}
 
 
-class DoubaoASRError(RuntimeError):
+class DoubaoASRError(UserFacingError):
     pass
 
 
