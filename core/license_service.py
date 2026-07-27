@@ -16,7 +16,7 @@ from core.config import (
 )
 from core.config_store import atomic_write_json, read_json
 from core.feishu_license_client import FeishuLicenseConfigError, build_direct_feishu_client
-from core.machine_id import get_machine_id
+from core.machine_id import machine_id_candidates
 
 
 @dataclass(slots=True)
@@ -32,7 +32,11 @@ class LicenseService:
     def __init__(self, api_url: str = LICENSE_API_URL, cache_path: Path = LICENSE_PATH) -> None:
         self.api_url = api_url.strip().rstrip("/")
         self.cache_path = cache_path
-        self.machine_id = get_machine_id()
+        candidates = machine_id_candidates()
+        self.machine_id = candidates[0]
+        # Identifiers this machine may already be registered under, from before
+        # the machine id stopped depending on network adapters and the PC name.
+        self.legacy_machine_ids = candidates[1:]
         self._direct_client = None
         self._direct_client_error = ""
         if not self.api_url:
@@ -67,7 +71,8 @@ class LicenseService:
 
     def load_cache(self) -> dict[str, Any]:
         data = read_json(self.cache_path)
-        if data.get("machine_id") != self.machine_id:
+        known = {self.machine_id, *self.legacy_machine_ids}
+        if data.get("machine_id") not in known:
             return {}
         return data
 
@@ -90,6 +95,7 @@ class LicenseService:
         payload = {
             "card_key": card_key,
             "machine_id": self.machine_id,
+            "legacy_machine_ids": self.legacy_machine_ids,
             "app_version": APP_VERSION,
         }
 
@@ -143,12 +149,14 @@ class LicenseService:
                     card_key=card_key,
                     machine_id=self.machine_id,
                     app_version=APP_VERSION,
+                    legacy_machine_ids=self.legacy_machine_ids,
                 )
             else:
                 data = self._direct_client.verify(
                     card_key=card_key,
                     machine_id=self.machine_id,
                     app_version=APP_VERSION,
+                    legacy_machine_ids=self.legacy_machine_ids,
                 )
         except requests.RequestException:
             return self._offline_or_fail(existing_cache, "网络异常，无法校验卡密")

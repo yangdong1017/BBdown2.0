@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -55,13 +56,47 @@ class FeishuLicenseClient:
         )
         self._field_type_cache: dict[str, int] = {}
 
-    def activate(self, *, card_key: str, machine_id: str, app_version: str) -> dict[str, Any]:
-        return self._handle(card_key=card_key, machine_id=machine_id, app_version=app_version, action="激活")
+    def activate(
+        self,
+        *,
+        card_key: str,
+        machine_id: str,
+        app_version: str,
+        legacy_machine_ids: Sequence[str] = (),
+    ) -> dict[str, Any]:
+        return self._handle(
+            card_key=card_key,
+            machine_id=machine_id,
+            app_version=app_version,
+            action="激活",
+            legacy_machine_ids=legacy_machine_ids,
+        )
 
-    def verify(self, *, card_key: str, machine_id: str, app_version: str) -> dict[str, Any]:
-        return self._handle(card_key=card_key, machine_id=machine_id, app_version=app_version, action="校验")
+    def verify(
+        self,
+        *,
+        card_key: str,
+        machine_id: str,
+        app_version: str,
+        legacy_machine_ids: Sequence[str] = (),
+    ) -> dict[str, Any]:
+        return self._handle(
+            card_key=card_key,
+            machine_id=machine_id,
+            app_version=app_version,
+            action="校验",
+            legacy_machine_ids=legacy_machine_ids,
+        )
 
-    def _handle(self, *, card_key: str, machine_id: str, app_version: str, action: str) -> dict[str, Any]:
+    def _handle(
+        self,
+        *,
+        card_key: str,
+        machine_id: str,
+        app_version: str,
+        action: str,
+        legacy_machine_ids: Sequence[str] = (),
+    ) -> dict[str, Any]:
         self._ensure_card_field_types()
         record = self._find_card_record(card_key)
         if not record:
@@ -87,22 +122,35 @@ class FeishuLicenseClient:
             return result
 
         if action == "激活":
-            result = self._activate_record(license_data, machine_id)
+            result = self._activate_record(license_data, machine_id, legacy_machine_ids)
         else:
-            result = self._verify_record(license_data, machine_id)
+            result = self._verify_record(license_data, machine_id, legacy_machine_ids)
 
         self._write_log_safe(card_key, machine_id, app_version, action, "通过" if result["ok"] else "拒绝", result["message"])
         return result
 
-    def _activate_record(self, license_data: dict[str, Any], machine_id: str) -> dict[str, Any]:
+    def _activate_record(
+        self,
+        license_data: dict[str, Any],
+        machine_id: str,
+        legacy_machine_ids: Sequence[str] = (),
+    ) -> dict[str, Any]:
         devices = _normalize_device_list(license_data["bound_devices"])
         has_device = machine_id in devices
-        max_devices = _normalize_max_devices(license_data["max_devices"])
-        if not has_device and len(devices) >= max_devices:
-            return _fail("设备数量已满")
+        next_devices = devices
+        if not has_device:
+            upgraded = _replace_legacy_device(devices, machine_id, legacy_machine_ids)
+            if upgraded is not None:
+                # Same machine under its old identifier: take over the slot it
+                # already owns instead of asking for a second one.
+                next_devices = upgraded
+            else:
+                max_devices = _normalize_max_devices(license_data["max_devices"])
+                if len(devices) >= max_devices:
+                    return _fail("设备数量已满")
+                next_devices = [*devices, machine_id]
 
         now = _now_millis()
-        next_devices = devices if has_device else [*devices, machine_id]
         patch: dict[str, Any] = {
             FIELD_STATUS: STATUS_ACTIVE,
             self._bound_devices_field_name(): ",".join(next_devices),
@@ -113,11 +161,20 @@ class FeishuLicenseClient:
         self._update_card_record(license_data["record_id"], patch)
         return _success("已激活" if has_device else "激活成功", license_data)
 
-    def _verify_record(self, license_data: dict[str, Any], machine_id: str) -> dict[str, Any]:
+    def _verify_record(
+        self,
+        license_data: dict[str, Any],
+        machine_id: str,
+        legacy_machine_ids: Sequence[str] = (),
+    ) -> dict[str, Any]:
         devices = _normalize_device_list(license_data["bound_devices"])
+        patch: dict[str, Any] = {FIELD_LAST_VERIFIED_AT: _now_millis()}
         if machine_id not in devices:
-            return _fail("当前设备未激活")
-        self._update_card_record(license_data["record_id"], {FIELD_LAST_VERIFIED_AT: _now_millis()})
+            upgraded = _replace_legacy_device(devices, machine_id, legacy_machine_ids)
+            if upgraded is None:
+                return _fail("当前设备未激活")
+            patch[self._bound_devices_field_name()] = ",".join(upgraded)
+        self._update_card_record(license_data["record_id"], patch)
         return _success("校验成功", license_data)
 
     def _find_card_record(self, card_key: str) -> dict[str, Any] | None:
@@ -251,6 +308,24 @@ def _normalize_max_devices(value: Any) -> int:
     except Exception:
         return 1
     return max(1, normalized)
+
+
+def _replace_legacy_device(
+    devices: list[str],
+    machine_id: str,
+    legacy_machine_ids: Sequence[str],
+) -> list[str] | None:
+    """Swap an old identifier of this same machine for the current one.
+
+    Returns the new device list, or None when this machine is not registered
+    under any of its old identifiers. Replacing rather than appending keeps the
+    device count unchanged, which matters for one-device cards.
+    """
+    known = {item for item in legacy_machine_ids if item}
+    if not known or not any(device in known for device in devices):
+        return None
+    upgraded = [machine_id if device in known else device for device in devices]
+    return list(dict.fromkeys(upgraded))
 
 
 def _normalize_device_list(value: Any) -> list[str]:

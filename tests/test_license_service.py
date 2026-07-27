@@ -38,7 +38,7 @@ class LicenseServiceTests(unittest.TestCase):
             cache_path = Path(directory) / "license.json"
             with (
                 patch("core.license_service.build_direct_feishu_client", return_value=direct_client),
-                patch("core.license_service.get_machine_id", return_value="machine-a"),
+                patch("core.license_service.machine_id_candidates", return_value=["machine-a"]),
             ):
                 service = LicenseService(api_url="", cache_path=cache_path)
                 activated = service.activate("DUYA9888")
@@ -55,7 +55,7 @@ class LicenseServiceTests(unittest.TestCase):
             cache_path = Path(directory) / "license.json"
             with (
                 patch("core.license_service.build_direct_feishu_client", return_value=direct_client),
-                patch("core.license_service.get_machine_id", return_value="machine-a"),
+                patch("core.license_service.machine_id_candidates", return_value=["machine-a"]),
             ):
                 service = LicenseService(api_url="", cache_path=cache_path)
                 self.assertTrue(service.activate("DUYA9888").ok)

@@ -110,5 +110,87 @@ class FeishuLicenseClientTests(unittest.TestCase):
         self.assertEqual(len(api.created), 1)
 
 
+class MachineIdMigrationTests(unittest.TestCase):
+    """Upgrading must not cost the user a device slot."""
+
+    def test_verify_takes_over_the_slot_the_old_id_already_owned(self) -> None:
+        api = _FakeFeishuApi([_record(status=STATUS_ACTIVE, devices="old-id", max_devices=1)])
+
+        result = _client(api).verify(
+            card_key="DUYA9888",
+            machine_id="new-id",
+            app_version="4.1",
+            legacy_machine_ids=["old-id"],
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(api.updated[0][2][FIELD_BOUND_DEVICES], "new-id")
+
+    def test_activate_on_a_one_device_card_still_works_after_upgrading(self) -> None:
+        api = _FakeFeishuApi([_record(status=STATUS_ACTIVE, devices="old-id", max_devices=1)])
+
+        result = _client(api).activate(
+            card_key="DUYA9888",
+            machine_id="new-id",
+            app_version="4.1",
+            legacy_machine_ids=["old-id"],
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(api.updated[0][2][FIELD_BOUND_DEVICES], "new-id")
+
+    def test_other_devices_on_the_card_are_left_alone(self) -> None:
+        api = _FakeFeishuApi([_record(status=STATUS_ACTIVE, devices="laptop,old-id", max_devices=2)])
+
+        result = _client(api).verify(
+            card_key="DUYA9888",
+            machine_id="new-id",
+            app_version="4.1",
+            legacy_machine_ids=["old-id"],
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(api.updated[0][2][FIELD_BOUND_DEVICES], "laptop,new-id")
+
+    def test_a_stranger_still_cannot_verify(self) -> None:
+        api = _FakeFeishuApi([_record(status=STATUS_ACTIVE, devices="old-id", max_devices=1)])
+
+        result = _client(api).verify(
+            card_key="DUYA9888",
+            machine_id="new-id",
+            app_version="4.1",
+            legacy_machine_ids=["a-different-machine"],
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["message"], "当前设备未激活")
+
+    def test_a_full_card_still_rejects_a_genuinely_new_machine(self) -> None:
+        api = _FakeFeishuApi([_record(status=STATUS_ACTIVE, devices="old-id", max_devices=1)])
+
+        result = _client(api).activate(
+            card_key="DUYA9888",
+            machine_id="new-id",
+            app_version="4.1",
+            legacy_machine_ids=[],
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["message"], "设备数量已满")
+
+    def test_an_already_migrated_device_is_not_written_twice(self) -> None:
+        api = _FakeFeishuApi([_record(status=STATUS_ACTIVE, devices="new-id", max_devices=1)])
+
+        result = _client(api).verify(
+            card_key="DUYA9888",
+            machine_id="new-id",
+            app_version="4.1",
+            legacy_machine_ids=["old-id"],
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertNotIn(FIELD_BOUND_DEVICES, api.updated[0][2])
+
+
 if __name__ == "__main__":
     unittest.main()
