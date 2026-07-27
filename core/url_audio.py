@@ -7,9 +7,9 @@ from urllib.parse import unquote, urlparse
 
 import requests
 
+from .links import AUDIO_SUFFIXES, dedupe, is_douyin_cdn_host, iter_urls
 
-URL_RE = re.compile(r"https?://[^\s<>'\"]+", re.IGNORECASE)
-AUDIO_SUFFIXES = (".mp3", ".m4a", ".aac", ".wav", ".flac", ".ogg")
+
 DOUBAO_DIRECT_SUFFIXES = {
     ".mp3": "mp3",
     ".wav": "wav",
@@ -19,11 +19,6 @@ AUDIO_PATH_HINTS = (
     "/obj/ies-music",
     "/tos-cn-ve-",
     "/tos-cn-i-",
-)
-AUDIO_HOST_HINTS = (
-    "douyinstatic.com",
-    "douyinvod.com",
-    "bytevod.com",
 )
 DOUYIN_SHARE_HOST_HINTS = (
     "v.douyin.com",
@@ -37,7 +32,6 @@ DOUYIN_SHARE_PATH_HINTS = (
     "/share/video/",
     "/share/note/",
 )
-TRAILING_PUNCTUATION = " \t\r\n\"'<>)]}，。；;、"
 DEFAULT_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -53,50 +47,29 @@ class AudioUrlError(RuntimeError):
 
 
 def extract_audio_urls(text: str) -> list[str]:
-    """Extract direct audio URLs from pasted text while preserving order."""
-    if not text:
-        return []
+    """Extract direct audio URLs from pasted text while preserving order.
 
-    urls: list[str] = []
-    seen: set[str] = set()
-    for match in URL_RE.finditer(text):
-        url = match.group(0).rstrip(TRAILING_PUNCTUATION)
-        if not _looks_like_audio_url(url):
-            continue
-        key = url.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        urls.append(url)
-    return urls
+    The transcribe page accepts an audio direct link from any host, so this is
+    deliberately more permissive than the Douyin download page.
+    """
+    return dedupe(url for url in iter_urls(text) if _looks_like_audio_url(url))
 
 
 def extract_douyin_share_urls(text: str) -> list[str]:
     """Extract Douyin video/note share URLs that are not direct audio URLs."""
-    if not text:
-        return []
-
-    urls: list[str] = []
-    seen: set[str] = set()
-    for match in URL_RE.finditer(text):
-        url = match.group(0).rstrip(TRAILING_PUNCTUATION)
-        if _looks_like_audio_url(url) or not _looks_like_douyin_share_url(url):
-            continue
-        key = url.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        urls.append(url)
-    return urls
+    return dedupe(
+        url
+        for url in iter_urls(text)
+        if not _looks_like_audio_url(url) and _looks_like_douyin_share_url(url)
+    )
 
 
 def _looks_like_audio_url(url: str) -> bool:
     parsed = urlparse(url)
     path = unquote(parsed.path).lower()
-    host = parsed.netloc.lower()
     if path.endswith(AUDIO_SUFFIXES):
         return True
-    if any(host_hint in host for host_hint in AUDIO_HOST_HINTS):
+    if is_douyin_cdn_host(parsed.hostname or ""):
         return any(path_hint in path for path_hint in AUDIO_PATH_HINTS)
     return False
 

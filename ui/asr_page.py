@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import os
-import subprocess
-import sys
 from pathlib import Path
 
 from PyQt5.QtCore import pyqtSignal
@@ -27,6 +24,7 @@ from core.toolchain import resolve_toolchain
 from core.url_asr_worker import UrlASRBatchResult, UrlASRWorkerThread, default_url_output_dir
 from core.url_audio import extract_audio_urls, extract_douyin_share_urls
 from .asr_inputs import LocalFileInput, UrlInput
+from .platform_utils import open_directory
 
 DOUYIN_ASR_MODE = "抖音音频链接转文字"
 
@@ -222,14 +220,8 @@ class ASRPage(QWidget):
             target = self.local_input.first_source_directory()
         if not target and self._is_douyin_mode():
             target = str(default_url_output_dir())
-        if not target or not Path(target).is_dir():
-            return
-        if sys.platform == "win32":
-            os.startfile(target)
-        elif sys.platform == "darwin":
-            subprocess.Popen(["open", target])
-        else:
-            subprocess.Popen(["xdg-open", target])
+        if not target or not open_directory(target):
+            MessageBox("提示", "输出目录还不存在，先跑一次任务或重新选择目录。", self.window()).exec()
 
     def add_files(self, files: list[str]) -> None:
         self.local_input.add_files(files)

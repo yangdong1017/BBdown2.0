@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import os
-import subprocess
-import sys
 from pathlib import Path
 
 from PyQt5.QtCore import QEasingCurve, QPropertyAnimation, QTimer, QUrl, Qt
@@ -46,6 +43,7 @@ from core.douyin_media import DouyinMediaLink
 from core.douyin_video_urls import extract_douyin_video_links
 from core.douyin_video_worker import DouyinMediaWorkerThread
 from core.models import DouyinVideoBatchResult
+from .platform_utils import open_directory
 from .widgets import CardFrame, TEXT_EDIT_STYLE
 
 
@@ -380,12 +378,8 @@ class DouyinVideoPage(QWidget):
         except OSError:
             MessageBox("提示", "保存目录不可用，请重新选择。", self.window()).exec()
             return
-        if sys.platform == "win32":
-            os.startfile(path)
-        elif sys.platform == "darwin":
-            subprocess.Popen(["open", str(path)])
-        else:
-            subprocess.Popen(["xdg-open", str(path)])
+        if not open_directory(path):
+            MessageBox("提示", "保存目录不可用，请重新选择。", self.window()).exec()
 
     def _copy_standard_link(self) -> None:
         QApplication.clipboard().setText(self._current_standard_link())

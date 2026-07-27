@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import os
-import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from core.atomic_io import write_text_atomic
 from core.doubao_asr import transcribe_doubao_url
 from core.tos_public_storage import PublicTOSObject, PublicTOSStorage
 
@@ -71,7 +70,7 @@ def transcribe_doubao_file(
         _check_stopped(stopped)
         _emit_status(status_callback, "识别中")
         text = transcribe_doubao_url(uploaded.url, "txt", stopped=stopped, infer_format=False)
-        _write_text_atomic(output_path, text, stopped)
+        write_text_atomic(output_path, text, stopped)
         completed = DoubaoFileASRResult(str(output_path))
     finally:
         if uploaded is not None:
@@ -95,22 +94,3 @@ def _check_stopped(stopped: Callable[[], bool]) -> None:
 def _emit_status(callback: Callable[[str], None] | None, status: str) -> None:
     if callback is not None:
         callback(status)
-
-
-def _write_text_atomic(output_path: Path, text: str, stopped: Callable[[], bool]) -> None:
-    _check_stopped(stopped)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{output_path.name}.",
-        suffix=".tmp",
-        dir=output_path.parent,
-    )
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as handle:
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
-        _check_stopped(stopped)
-        os.replace(temporary_name, output_path)
-    finally:
-        Path(temporary_name).unlink(missing_ok=True)

@@ -1,9 +1,6 @@
 from __future__ import annotations
 
 import locale
-import os
-import subprocess
-import sys
 from pathlib import Path
 
 from PyQt5.QtCore import QEasingCurve, QPropertyAnimation, QTimer, QUrl, Qt
@@ -46,9 +43,11 @@ from core.config import (
     update_app_config,
 )
 from core.bilibili_workers import DownloadWorkerThread
+from core.links import dedupe
 from core.models import AppConfig, DownloadBatchResult
 from core.toolchain import resolve_toolchain
 from .bilibili_login_panel import BilibiliLoginPanel
+from .platform_utils import open_directory
 from .widgets import CardFrame, TEXT_EDIT_STYLE
 
 
@@ -319,17 +318,8 @@ class DownloadPage(QWidget):
         text = self.url_edit.toPlainText()
         if self._parsed_urls_cache is not None and self._parsed_urls_cache[0] == text:
             return self._parsed_urls_cache[1]
-        urls: list[str] = []
-        seen: set[str] = set()
-        for line in text.splitlines():
-            item = line.strip()
-            if not looks_like_video_input(item):
-                continue
-            key = item.lower()
-            if key in seen:
-                continue
-            seen.add(key)
-            urls.append(item)
+        candidates = (line.strip() for line in text.splitlines())
+        urls = dedupe(item for item in candidates if looks_like_video_input(item))
         self._parsed_urls_cache = (text, urls)
         return urls
 
@@ -354,16 +344,8 @@ class DownloadPage(QWidget):
             self._save_config()
 
     def _open_save_dir(self) -> None:
-        path = Path(self.config.save_dir)
-        if not path.exists():
+        if not open_directory(self.config.save_dir):
             MessageBox("提示", "当前保存目录不存在，请先重新选择。", self.window()).exec()
-            return
-        if sys.platform == "win32":
-            os.startfile(path)
-        elif sys.platform == "darwin":
-            subprocess.Popen(["open", str(path)])
-        else:
-            subprocess.Popen(["xdg-open", str(path)])
 
     def _open_example_link(self) -> None:
         if QDesktopServices.openUrl(QUrl(BILIBILI_STANDARD_LINK)):
@@ -524,9 +506,9 @@ class DownloadPage(QWidget):
         if result.stopped:
             self._set_status(f"批量任务已停止，已完成 {result.completed}/{result.total}")
             return
-        self.no_output_urls = self._dedupe_links(result.no_output_urls)
-        self.failed_urls = self._dedupe_links(result.failed_urls)
-        abnormal_urls = self._dedupe_links(self.no_output_urls + self.failed_urls)
+        self.no_output_urls = dedupe(link.strip() for link in result.no_output_urls)
+        self.failed_urls = dedupe(link.strip() for link in result.failed_urls)
+        abnormal_urls = dedupe(self.no_output_urls + self.failed_urls)
         media_name = "视频" if self.config.bilibili_download_type == BILIBILI_VIDEO_DOWNLOAD else "音频"
         file_count = len(result.completed_files)
         no_output_count = len(self.no_output_urls)
@@ -539,17 +521,6 @@ class DownloadPage(QWidget):
             )
         else:
             self._set_status(f"批量任务完成，生成 {file_count} 个{media_name}")
-
-    def _dedupe_links(self, links: list[str]) -> list[str]:
-        result: list[str] = []
-        seen: set[str] = set()
-        for link in links:
-            key = link.strip().lower()
-            if not key or key in seen:
-                continue
-            seen.add(key)
-            result.append(link.strip())
-        return result
 
     def stop(self) -> None:
         stopped_any = False
