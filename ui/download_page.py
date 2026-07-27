@@ -3,15 +3,12 @@ from __future__ import annotations
 import locale
 from pathlib import Path
 
-from PyQt5.QtCore import QEasingCurve, QPropertyAnimation, QTimer, QUrl, Qt
-from PyQt5.QtGui import QColor, QDesktopServices
+from PyQt5.QtCore import QTimer, QUrl, Qt
+from PyQt5.QtGui import QDesktopServices
 from PyQt5.QtWidgets import (
-    QAbstractItemView,
     QApplication,
     QFileDialog,
     QHBoxLayout,
-    QHeaderView,
-    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -20,16 +17,13 @@ from qfluentwidgets import (
     BodyLabel,
     CaptionLabel,
     ComboBox,
-    FluentIcon as FIF,
     MessageBox,
     PrimaryPushButton,
     ProgressBar,
     PushButton,
     SegmentedWidget,
-    TableWidget,
     TextEdit,
     TitleLabel,
-    ToolButton,
 )
 
 from core.commands import bilibili_display_id, looks_like_video_input
@@ -47,7 +41,9 @@ from core.links import dedupe
 from core.models import AppConfig, DownloadBatchResult
 from core.toolchain import resolve_toolchain
 from .bilibili_login_panel import BilibiliLoginPanel
+from .collapsible_panel import CollapsibleRightPanel
 from .platform_utils import open_directory
+from .task_table import TaskTable
 from .widgets import CardFrame, TEXT_EDIT_STYLE
 
 
@@ -55,13 +51,6 @@ BILIBILI_STANDARD_LINK = "https://www.bilibili.com/video/BV1v46zBzEX2/"
 # Writing the config on every keystroke rewrites the whole JSON file. Wait until
 # the user stops typing, the same way the Douyin page already does.
 CONFIG_SAVE_DELAY_MS = 350
-BILIBILI_STATUS_COLORS = {
-    "等待中": "#a8a8a8",
-    "下载中": "#e5b84a",
-    "已完成": "#7fd26f",
-    "失败": "#ff6a5c",
-    "已停止": "#a8a8a8",
-}
 
 
 class DownloadPage(QWidget):
@@ -121,28 +110,10 @@ class DownloadPage(QWidget):
         left.addWidget(self._build_task_table(), 4)
         split.addWidget(self.left_panel, 1)
 
-        self.right_panel_toggle = ToolButton(self)
-        self.right_panel_toggle.setIcon(FIF.CARE_RIGHT_SOLID)
-        self.right_panel_toggle.setFixedSize(26, 72)
-        self.right_panel_toggle.setToolTip("收起右侧面板")
-        self.right_panel_toggle.clicked.connect(self._toggle_right_panel)
-        split.addWidget(self.right_panel_toggle, 0, Qt.AlignVCenter)
-
-        self.right_panel = QWidget(self)
-        self.right_panel.setMinimumWidth(0)
-        self.right_panel.setMaximumWidth(400)
-        right = QVBoxLayout(self.right_panel)
-        right.setContentsMargins(0, 0, 0, 0)
-        right.setSpacing(14)
-        right.addWidget(self._build_settings_card())
-        right.addWidget(self._build_login_panel(), 1)
+        self.right_panel = CollapsibleRightPanel(self)
+        self.right_panel.content_layout.addWidget(self._build_settings_card())
+        self.right_panel.content_layout.addWidget(self._build_login_panel(), 1)
         split.addWidget(self.right_panel)
-
-        self.right_panel_expanded = True
-        self.right_panel_animation = QPropertyAnimation(self.right_panel, b"maximumWidth", self)
-        self.right_panel_animation.setDuration(220)
-        self.right_panel_animation.setEasingCurve(QEasingCurve.OutCubic)
-        self.right_panel_animation.finished.connect(self._on_right_panel_animation_finished)
 
         self.status_label = CaptionLabel("就绪", self)
         root.addWidget(self.status_label)
@@ -207,21 +178,8 @@ class DownloadPage(QWidget):
         content_layout.addLayout(action_row)
         return content_card
 
-    def _build_task_table(self) -> TableWidget:
-        self.table = TableWidget(self)
-        self.table.setBorderVisible(True)
-        self.table.setBorderRadius(8)
-        self.table.setColumnCount(3)
-        self.table.setHorizontalHeaderLabels(["视频ID", "进度", "状态"])
-        header = self.table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.Stretch)
-        header.setSectionResizeMode(1, QHeaderView.Fixed)
-        header.setSectionResizeMode(2, QHeaderView.Fixed)
-        self.table.setColumnWidth(1, 110)
-        self.table.setColumnWidth(2, 180)
-        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.table.setAlternatingRowColors(False)
+    def _build_task_table(self) -> TaskTable:
+        self.table = TaskTable(self, id_header="视频ID")
         return self.table
 
     def _build_settings_card(self) -> CardFrame:
@@ -356,27 +314,6 @@ class DownloadPage(QWidget):
         QApplication.clipboard().setText(BILIBILI_STANDARD_LINK)
         self._set_status("标准链接已复制，可以粘贴使用。")
 
-    def _toggle_right_panel(self) -> None:
-        self.right_panel_animation.stop()
-        start_width = self.right_panel.width()
-        self.right_panel_expanded = not self.right_panel_expanded
-        if self.right_panel_expanded:
-            self.right_panel.setVisible(True)
-            self.right_panel_toggle.setIcon(FIF.CARE_RIGHT_SOLID)
-            self.right_panel_toggle.setToolTip("收起右侧面板")
-            target_width = 400
-        else:
-            self.right_panel_toggle.setIcon(FIF.CARE_LEFT_SOLID)
-            self.right_panel_toggle.setToolTip("展开右侧面板")
-            target_width = 0
-        self.right_panel_animation.setStartValue(start_width)
-        self.right_panel_animation.setEndValue(target_width)
-        self.right_panel_animation.start()
-
-    def _on_right_panel_animation_finished(self) -> None:
-        if not self.right_panel_expanded:
-            self.right_panel.setVisible(False)
-
     def _reset_task(self) -> None:
         if self.is_running():
             MessageBox("提示", "任务正在运行，请先停止再清空。", self.window()).exec()
@@ -468,36 +405,13 @@ class DownloadPage(QWidget):
             window.setWindowTitle(f"BBDown - B站下载 {completed}/{total}")
 
     def _populate_tasks(self, urls: list[str]) -> None:
-        self.table.setUpdatesEnabled(False)
-        self.table.setRowCount(len(urls))
-        for row, url in enumerate(urls):
-            id_item = QTableWidgetItem(bilibili_display_id(url))
-            progress_item = QTableWidgetItem("0%")
-            progress_item.setTextAlignment(Qt.AlignCenter)
-            status_item = QTableWidgetItem("等待中")
-            status_item.setForeground(QColor(BILIBILI_STATUS_COLORS["等待中"]))
-            self.table.setItem(row, 0, id_item)
-            self.table.setItem(row, 1, progress_item)
-            self.table.setItem(row, 2, status_item)
-        self.table.setUpdatesEnabled(True)
+        self.table.populate([bilibili_display_id(url) for url in urls])
 
     def _on_task_progress(self, index: int, percent: int) -> None:
-        progress_item = self.table.item(index - 1, 1)
-        if progress_item is not None:
-            progress_item.setText(f"{min(100, max(0, percent))}%")
+        self.table.set_percent(index - 1, percent)
 
     def _on_task_status(self, index: int, status: str, detail: str) -> None:
-        row = index - 1
-        status_item = self.table.item(row, 2)
-        progress_item = self.table.item(row, 1)
-        if status_item is not None:
-            status_item.setText(f"{status}：{detail}" if status == "失败" and detail else status)
-            status_item.setForeground(QColor(BILIBILI_STATUS_COLORS.get(status, "#a8a8a8")))
-        if progress_item is not None:
-            if status == "已完成":
-                progress_item.setText("100%")
-            elif status in {"失败", "已停止"}:
-                progress_item.setText("--")
+        self.table.set_status(index - 1, status, detail)
 
     def _on_download_finished(self, result: object) -> None:
         assert isinstance(result, DownloadBatchResult)

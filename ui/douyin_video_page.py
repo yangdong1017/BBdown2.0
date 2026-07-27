@@ -2,15 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt5.QtCore import QEasingCurve, QPropertyAnimation, QTimer, QUrl, Qt
-from PyQt5.QtGui import QColor, QDesktopServices
+from PyQt5.QtCore import QTimer, QUrl, Qt
+from PyQt5.QtGui import QDesktopServices
 from PyQt5.QtWidgets import (
-    QAbstractItemView,
     QApplication,
     QFileDialog,
     QHBoxLayout,
-    QHeaderView,
-    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -18,16 +15,13 @@ from qfluentwidgets import (
     BodyLabel,
     CaptionLabel,
     ComboBox,
-    FluentIcon as FIF,
     MessageBox,
     PrimaryPushButton,
     ProgressBar,
     PushButton,
     SegmentedWidget,
-    TableWidget,
     TextEdit,
     TitleLabel,
-    ToolButton,
 )
 
 from core.config import (
@@ -43,18 +37,11 @@ from core.douyin_media import DouyinMediaLink
 from core.douyin_video_urls import extract_douyin_video_links
 from core.douyin_video_worker import DouyinMediaWorkerThread
 from core.models import DouyinVideoBatchResult
+from .collapsible_panel import CollapsibleRightPanel
 from .platform_utils import open_directory
+from .task_table import TaskTable
 from .widgets import CardFrame, TEXT_EDIT_STYLE
 
-
-STATUS_COLORS = {
-    "等待中": "#a8a8a8",
-    "下载中": "#e5b84a",
-    "已完成": "#7fd26f",
-    "已存在": "#6aaee6",
-    "失败": "#ff6a5c",
-    "已停止": "#a8a8a8",
-}
 
 DOUYIN_STANDARD_VIDEO_LINK = (
     "https://aweme.snssdk.com/aweme/v1/play/"
@@ -101,29 +88,11 @@ class DouyinVideoPage(QWidget):
         left.addWidget(self._build_task_table(), 1)
         split.addWidget(self.left_panel, 1)
 
-        self.right_panel_toggle = ToolButton(self)
-        self.right_panel_toggle.setIcon(FIF.CARE_RIGHT_SOLID)
-        self.right_panel_toggle.setFixedSize(26, 72)
-        self.right_panel_toggle.setToolTip("收起右侧面板")
-        self.right_panel_toggle.clicked.connect(self._toggle_right_panel)
-        split.addWidget(self.right_panel_toggle, 0, Qt.AlignVCenter)
-
-        self.right_panel = QWidget(self)
-        self.right_panel.setMinimumWidth(0)
-        self.right_panel.setMaximumWidth(400)
-        right = QVBoxLayout(self.right_panel)
-        right.setContentsMargins(0, 0, 0, 0)
-        right.setSpacing(14)
+        self.right_panel = CollapsibleRightPanel(self)
         self.download_settings_card = self._build_download_settings_card()
-        right.addWidget(self.download_settings_card)
-        right.addStretch(1)
+        self.right_panel.content_layout.addWidget(self.download_settings_card)
+        self.right_panel.content_layout.addStretch(1)
         split.addWidget(self.right_panel)
-
-        self.right_panel_expanded = True
-        self.right_panel_animation = QPropertyAnimation(self.right_panel, b"maximumWidth", self)
-        self.right_panel_animation.setDuration(220)
-        self.right_panel_animation.setEasingCurve(QEasingCurve.OutCubic)
-        self.right_panel_animation.finished.connect(self._on_right_panel_animation_finished)
 
         self.status_label = CaptionLabel("就绪", self)
         root.addWidget(self.status_label)
@@ -246,22 +215,9 @@ class DouyinVideoPage(QWidget):
         action_row.addStretch(1)
         return action_row
 
-    def _build_task_table(self) -> TableWidget:
-        self.table = TableWidget(self)
-        self.table.setBorderVisible(True)
-        self.table.setBorderRadius(8)
-        self.table.setColumnCount(3)
+    def _build_task_table(self) -> TaskTable:
         media_name = "音频" if self.current_download_type == DOUYIN_AUDIO_DOWNLOAD else "视频"
-        self.table.setHorizontalHeaderLabels([f"{media_name}ID", "进度", "状态"])
-        header = self.table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.Stretch)
-        header.setSectionResizeMode(1, QHeaderView.Fixed)
-        header.setSectionResizeMode(2, QHeaderView.Fixed)
-        self.table.setColumnWidth(1, 110)
-        self.table.setColumnWidth(2, 180)
-        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.table.setAlternatingRowColors(False)
+        self.table = TaskTable(self, id_header=f"{media_name}ID")
         return self.table
 
     def _apply_state(self) -> None:
@@ -400,27 +356,6 @@ class DouyinVideoPage(QWidget):
         self._on_batch_progress(0, 0, 0)
         self.status_label.setText("就绪")
 
-    def _toggle_right_panel(self) -> None:
-        self.right_panel_animation.stop()
-        start_width = self.right_panel.width()
-        self.right_panel_expanded = not self.right_panel_expanded
-        if self.right_panel_expanded:
-            self.right_panel.setVisible(True)
-            self.right_panel_toggle.setIcon(FIF.CARE_RIGHT_SOLID)
-            self.right_panel_toggle.setToolTip("收起右侧面板")
-            target_width = 400
-        else:
-            self.right_panel_toggle.setIcon(FIF.CARE_LEFT_SOLID)
-            self.right_panel_toggle.setToolTip("展开右侧面板")
-            target_width = 0
-        self.right_panel_animation.setStartValue(start_width)
-        self.right_panel_animation.setEndValue(target_width)
-        self.right_panel_animation.start()
-
-    def _on_right_panel_animation_finished(self) -> None:
-        if not self.right_panel_expanded:
-            self.right_panel.setVisible(False)
-
     def _start_download(self) -> None:
         if self.is_running():
             return
@@ -456,20 +391,8 @@ class DouyinVideoPage(QWidget):
         self._set_running_state(True)
 
     def _populate_tasks(self, links: list[DouyinMediaLink]) -> None:
-        self.table.setUpdatesEnabled(False)
-        self.table.setRowCount(len(links))
-        self.row_by_media_id.clear()
-        for row, link in enumerate(links):
-            self.row_by_media_id[link.task_id] = row
-            id_item = QTableWidgetItem(link.task_id)
-            progress_item = QTableWidgetItem("0%")
-            progress_item.setTextAlignment(Qt.AlignCenter)
-            status_item = QTableWidgetItem("等待中")
-            status_item.setForeground(QColor(STATUS_COLORS["等待中"]))
-            self.table.setItem(row, 0, id_item)
-            self.table.setItem(row, 1, progress_item)
-            self.table.setItem(row, 2, status_item)
-        self.table.setUpdatesEnabled(True)
+        self.row_by_media_id = {link.task_id: row for row, link in enumerate(links)}
+        self.table.populate([link.task_id for link in links])
 
     def _on_task_progress_batch(self, updates: dict[str, tuple[int, int]]) -> None:
         for task_id, (downloaded, total) in updates.items():
@@ -479,28 +402,17 @@ class DouyinVideoPage(QWidget):
         row = self.row_by_media_id.get(task_id)
         if row is None:
             return
-        progress_item = self.table.item(row, 1)
-        if progress_item is None:
-            return
         if total > 0:
-            progress_item.setText(f"{min(100, int(downloaded * 100 / total))}%")
+            self.table.set_percent(row, int(downloaded * 100 / total))
         else:
-            progress_item.setText(f"{downloaded / 1024 / 1024:.1f} MB")
+            # Some CDN responses have no Content-Length, so show what arrived.
+            self.table.set_progress_text(row, f"{downloaded / 1024 / 1024:.1f} MB")
 
     def _on_task_status(self, task_id: str, status: str, detail: str) -> None:
         row = self.row_by_media_id.get(task_id)
         if row is None:
             return
-        status_item = self.table.item(row, 2)
-        progress_item = self.table.item(row, 1)
-        if status_item is not None:
-            status_item.setText(f"{status}：{detail}" if detail and status == "失败" else status)
-            status_item.setForeground(QColor(STATUS_COLORS.get(status, "#a8a8a8")))
-        if progress_item is not None:
-            if status in {"已完成", "已存在"}:
-                progress_item.setText("100%")
-            elif status in {"失败", "已停止"}:
-                progress_item.setText("--")
+        self.table.set_status(row, status, detail)
 
     def _on_batch_progress(self, processed: int, total: int, active: int) -> None:
         percent = int(processed * 100 / total) if total else 0
