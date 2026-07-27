@@ -15,12 +15,16 @@ class _FakePage:
     def __init__(self) -> None:
         self.running = True
         self.stop_called = False
+        self.flush_called = False
 
     def is_running(self) -> bool:
         return self.running
 
     def stop(self) -> None:
         self.stop_called = True
+
+    def flush_pending_save(self) -> None:
+        self.flush_called = True
 
 
 class _FakeCloseEvent:
@@ -53,6 +57,9 @@ class MainWindowCloseTests(unittest.TestCase):
         self.assertTrue(event.ignored)
         self.assertTrue(window._close_timer.isActive())
         self.assertTrue(all(page.stop_called for page in pages))
+        # Links typed in the last moment must be saved before the window goes away.
+        self.assertTrue(pages[0].flush_called)
+        self.assertTrue(pages[1].flush_called)
 
         for page in pages:
             page.running = False

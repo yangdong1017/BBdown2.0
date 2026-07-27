@@ -25,6 +25,10 @@ MEDIA_HEADERS = {
 
 ProgressCallback = Callable[[str, int, int], None]
 
+# One connection pool per batch. Without it every task and every retry opened a
+# brand new connection, so the pool never got reused under high concurrency.
+DEFAULT_CONNECTION_POOL_SIZE = 10
+
 
 @dataclass(slots=True)
 class DouyinMediaDownloadResult:
@@ -41,11 +45,20 @@ class MediaDownloadError(RuntimeError):
 
 
 class DouyinMediaDownloader:
-    def __init__(self, stop_event: threading.Event, progress_callback: ProgressCallback) -> None:
+    def __init__(
+        self,
+        stop_event: threading.Event,
+        progress_callback: ProgressCallback,
+        *,
+        pool_size: int = DEFAULT_CONNECTION_POOL_SIZE,
+    ) -> None:
         self.stop_event = stop_event
         self.progress_callback = progress_callback
         self._responses: dict[str, requests.Response] = {}
         self._response_lock = threading.Lock()
+        self._pool_size = max(1, int(pool_size))
+        self._session: requests.Session | None = None
+        self._session_lock = threading.Lock()
 
     def stop(self) -> None:
         self.stop_event.set()
@@ -56,6 +69,31 @@ class DouyinMediaDownloader:
                 response.close()
             except Exception:
                 pass
+        self.close()
+
+    def close(self) -> None:
+        """Release the shared connection pool once a batch is over."""
+        with self._session_lock:
+            session, self._session = self._session, None
+        if session is not None:
+            try:
+                session.close()
+            except Exception:
+                pass
+
+    def _session_for_download(self) -> requests.Session:
+        with self._session_lock:
+            if self._session is None:
+                session = requests.Session()
+                adapter = requests.adapters.HTTPAdapter(
+                    pool_connections=self._pool_size,
+                    pool_maxsize=self._pool_size,
+                    max_retries=0,
+                )
+                session.mount("http://", adapter)
+                session.mount("https://", adapter)
+                self._session = session
+            return self._session
 
     def download(self, link: DouyinMediaLink, save_dir: Path) -> DouyinMediaDownloadResult:
         try:
@@ -110,21 +148,20 @@ class DouyinMediaDownloader:
     ) -> DouyinMediaDownloadResult:
         response: requests.Response | None = None
         try:
-            with requests.Session() as session:
-                response = session.get(
-                    link.url,
-                    headers=MEDIA_HEADERS,
-                    stream=True,
-                    allow_redirects=True,
-                    timeout=DOUYIN_VIDEO_TIMEOUT,
-                )
-                self._register_response(link.task_id, response)
-                self._check_response(response, link)
-                downloaded, total_bytes = self._stream_to_partial(link.task_id, response, partial)
-                self._validate_download(downloaded, total_bytes, link.media_label)
-                os.replace(partial, target)
-                self.progress_callback(link.task_id, downloaded, total_bytes or downloaded)
-                return DouyinMediaDownloadResult(link=link, status="completed", output_path=str(target))
+            response = self._session_for_download().get(
+                link.url,
+                headers=MEDIA_HEADERS,
+                stream=True,
+                allow_redirects=True,
+                timeout=DOUYIN_VIDEO_TIMEOUT,
+            )
+            self._register_response(link.task_id, response)
+            self._check_response(response, link)
+            downloaded, total_bytes = self._stream_to_partial(link.task_id, response, partial)
+            self._validate_download(downloaded, total_bytes, link.media_label)
+            os.replace(partial, target)
+            self.progress_callback(link.task_id, downloaded, total_bytes or downloaded)
+            return DouyinMediaDownloadResult(link=link, status="completed", output_path=str(target))
         finally:
             if response is not None:
                 self._unregister_response(link.task_id, response)

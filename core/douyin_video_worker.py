@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -11,6 +12,11 @@ from .douyin_media import DouyinMediaLink
 from .douyin_video_downloader import DouyinMediaDownloadResult, DouyinMediaDownloader
 from .models import DouyinVideoBatchResult
 from .task_scheduler import run_limited_tasks
+
+
+# Each task reports progress every 0.25s, so 50 downloads would hit the UI
+# thread 200 times a second. Collect the updates and send them in one batch.
+PROGRESS_FLUSH_INTERVAL = 0.2
 
 
 @dataclass(slots=True)
@@ -24,7 +30,8 @@ class _BatchState:
 
 class DouyinMediaWorkerThread(QThread):
     status = pyqtSignal(str)
-    task_progress = pyqtSignal(str, int, int)
+    # {task_id: (downloaded_bytes, total_bytes)}
+    task_progress = pyqtSignal(object)
     task_status = pyqtSignal(str, str, str)
     batch_progress = pyqtSignal(int, int, int)
     finished_all = pyqtSignal(object)
@@ -44,7 +51,14 @@ class DouyinMediaWorkerThread(QThread):
         self._counter_lock = threading.Lock()
         self._processed = 0
         self._active = 0
-        self.downloader = DouyinMediaDownloader(self.stop_event, self.task_progress.emit)
+        self._progress_lock = threading.Lock()
+        self._pending_progress: dict[str, tuple[int, int]] = {}
+        self._last_progress_flush = 0.0
+        self.downloader = DouyinMediaDownloader(
+            self.stop_event,
+            self._emit_task_progress,
+            pool_size=self.concurrency,
+        )
 
     def stop(self) -> None:
         self.status.emit("正在停止任务，不再开始新任务...")
@@ -52,7 +66,11 @@ class DouyinMediaWorkerThread(QThread):
 
     def run(self) -> None:
         try:
-            result = self._run_batch()
+            try:
+                result = self._run_batch()
+            finally:
+                self._flush_task_progress()
+                self.downloader.close()
         except Exception:
             stopped = self.stop_event.is_set()
             task_state = "已停止" if stopped else "失败"
@@ -116,7 +134,29 @@ class DouyinMediaWorkerThread(QThread):
         finally:
             with self._counter_lock:
                 self._active = max(0, self._active - 1)
+            self._flush_task_progress()
             self._emit_batch_progress(total)
+
+    def _emit_task_progress(self, task_id: str, downloaded: int, total: int) -> None:
+        with self._progress_lock:
+            self._pending_progress[task_id] = (downloaded, total)
+            now = time.monotonic()
+            if now - self._last_progress_flush < PROGRESS_FLUSH_INTERVAL:
+                return
+            self._last_progress_flush = now
+            batch = self._pending_progress
+            self._pending_progress = {}
+        self.task_progress.emit(batch)
+
+    def _flush_task_progress(self) -> None:
+        """Send whatever is still buffered, so a finished task never stays stale."""
+        with self._progress_lock:
+            if not self._pending_progress:
+                return
+            batch = self._pending_progress
+            self._pending_progress = {}
+            self._last_progress_flush = time.monotonic()
+        self.task_progress.emit(batch)
 
     def _task_error(
         self,

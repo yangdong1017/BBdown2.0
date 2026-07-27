@@ -6,7 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from PyQt5.QtCore import QEasingCurve, QPropertyAnimation, QUrl, Qt
+from PyQt5.QtCore import QEasingCurve, QPropertyAnimation, QTimer, QUrl, Qt
 from PyQt5.QtGui import QColor, QDesktopServices
 from PyQt5.QtWidgets import (
     QAbstractItemView,
@@ -53,6 +53,9 @@ from .widgets import CardFrame, TEXT_EDIT_STYLE
 
 
 BILIBILI_STANDARD_LINK = "https://www.bilibili.com/video/BV1v46zBzEX2/"
+# Writing the config on every keystroke rewrites the whole JSON file. Wait until
+# the user stops typing, the same way the Douyin page already does.
+CONFIG_SAVE_DELAY_MS = 350
 BILIBILI_STATUS_COLORS = {
     "等待中": "#a8a8a8",
     "下载中": "#e5b84a",
@@ -71,6 +74,11 @@ class DownloadPage(QWidget):
         self.download_worker: DownloadWorkerThread | None = None
         self.failed_urls: list[str] = []
         self.no_output_urls: list[str] = []
+        self._parsed_urls_cache: tuple[str, list[str]] | None = None
+        self.save_timer = QTimer(self)
+        self.save_timer.setSingleShot(True)
+        self.save_timer.setInterval(CONFIG_SAVE_DELAY_MS)
+        self.save_timer.timeout.connect(self._save_config)
         self._build_ui()
         self._apply_state()
 
@@ -165,7 +173,7 @@ class DownloadPage(QWidget):
         self.url_edit = TextEdit(content_card)
         self.url_edit.setMinimumHeight(260)
         self.url_edit.setStyleSheet(TEXT_EDIT_STYLE)
-        self.url_edit.textChanged.connect(self._update_count)
+        self.url_edit.textChanged.connect(self._on_text_changed)
         content_layout.addWidget(self.url_edit)
 
         count_row = QHBoxLayout()
@@ -261,7 +269,9 @@ class DownloadPage(QWidget):
         return self.login_panel
 
     def _apply_state(self) -> None:
+        self.url_edit.blockSignals(True)
         self.url_edit.setPlainText(self.config.last_urls)
+        self.url_edit.blockSignals(False)
         self.thread_combo.setCurrentText(str(self.config.thread_count))
         self.download_type_segment.setCurrentItem(self.config.bilibili_download_type)
         self._refresh_engine_status()
@@ -291,6 +301,7 @@ class DownloadPage(QWidget):
         self.start_btn.setText("开始下载视频" if is_video else "开始下载音频")
 
     def _save_config(self) -> None:
+        self.save_timer.stop()
         self.config.last_urls = self.url_edit.toPlainText().strip()
         update_app_config(
             last_urls=self.config.last_urls,
@@ -299,10 +310,18 @@ class DownloadPage(QWidget):
             bilibili_download_type=self.config.bilibili_download_type,
         )
 
+    def flush_pending_save(self) -> None:
+        """Persist a debounced edit right away, e.g. before closing the window."""
+        if self.save_timer.isActive():
+            self._save_config()
+
     def _parse_urls(self) -> list[str]:
+        text = self.url_edit.toPlainText()
+        if self._parsed_urls_cache is not None and self._parsed_urls_cache[0] == text:
+            return self._parsed_urls_cache[1]
         urls: list[str] = []
         seen: set[str] = set()
-        for line in self.url_edit.toPlainText().splitlines():
+        for line in text.splitlines():
             item = line.strip()
             if not looks_like_video_input(item):
                 continue
@@ -311,11 +330,15 @@ class DownloadPage(QWidget):
                 continue
             seen.add(key)
             urls.append(item)
+        self._parsed_urls_cache = (text, urls)
         return urls
+
+    def _on_text_changed(self) -> None:
+        self._update_count()
+        self.save_timer.start()
 
     def _update_count(self) -> None:
         self.count_label.setText(f"{len(self._parse_urls())} 个有效链接")
-        self._save_config()
 
     def _clean_urls(self) -> None:
         urls = self._parse_urls()
@@ -426,6 +449,7 @@ class DownloadPage(QWidget):
             MessageBox("提示", "没有检测到 ffmpeg 或 mp4box，当前无法下载。", self.window()).exec()
             return
 
+        self.flush_pending_save()
         self.failed_urls = []
         self.no_output_urls = []
         media_name = "视频" if self.config.bilibili_download_type == BILIBILI_VIDEO_DOWNLOAD else "音频"

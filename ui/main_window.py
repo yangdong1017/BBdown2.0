@@ -69,6 +69,7 @@ class MainWindow(FluentWindow):
         self.asr_page.add_files(files)
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
+        self._flush_pending_saves()
         if self._allow_close:
             event.accept()
             return
@@ -88,6 +89,11 @@ class MainWindow(FluentWindow):
             event.ignore()
             return
         event.accept()
+
+    def _flush_pending_saves(self) -> None:
+        """Pages save typed links after a short pause; don't lose the last edit."""
+        for page in (self.download_page, self.douyin_video_page):
+            page.flush_pending_save()
 
     def _has_running_tasks(self) -> bool:
         return any(

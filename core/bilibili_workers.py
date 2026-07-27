@@ -150,6 +150,7 @@ class DownloadWorkerThread(BaseProcessThread):
         self.save_path = Path(save_dir)
         self.output_paths = OutputPathAllocator()
         self._progress_lock = threading.Lock()
+        self._last_percent: dict[int, int] = {}
         self._processed = 0
         self._active_jobs = 0
 
@@ -255,6 +256,12 @@ class DownloadWorkerThread(BaseProcessThread):
         if not percentages:
             return
         percent = min(100, max(int(value) for value in percentages))
+        # BBDown prints a progress line several times a second; only tell the UI
+        # about it when the number actually moved.
+        with self._progress_lock:
+            if self._last_percent.get(index) == percent:
+                return
+            self._last_percent[index] = percent
         self.task_progress.emit(index, percent)
 
     def _record_download_result(

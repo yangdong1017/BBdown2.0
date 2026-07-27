@@ -325,9 +325,15 @@ class DouyinVideoPage(QWidget):
         self.save_timer.start()
 
     def _save_config(self) -> None:
+        self.save_timer.stop()
         self._store_active_urls()
         self.config.download_type = self.current_download_type
         save_douyin_video_config(self.config)
+
+    def flush_pending_save(self) -> None:
+        """Persist a debounced edit right away, e.g. before closing the window."""
+        if self.save_timer.isActive():
+            self._save_config()
 
     def _store_active_urls(self) -> None:
         text = self.url_edit.toPlainText().strip()
@@ -448,7 +454,7 @@ class DouyinVideoPage(QWidget):
             parent=self,
         )
         self.worker.status.connect(self.status_label.setText)
-        self.worker.task_progress.connect(self._on_task_progress)
+        self.worker.task_progress.connect(self._on_task_progress_batch)
         self.worker.task_status.connect(self._on_task_status)
         self.worker.batch_progress.connect(self._on_batch_progress)
         self.worker.finished_all.connect(self._on_finished)
@@ -470,6 +476,10 @@ class DouyinVideoPage(QWidget):
             self.table.setItem(row, 1, progress_item)
             self.table.setItem(row, 2, status_item)
         self.table.setUpdatesEnabled(True)
+
+    def _on_task_progress_batch(self, updates: dict[str, tuple[int, int]]) -> None:
+        for task_id, (downloaded, total) in updates.items():
+            self._on_task_progress(task_id, downloaded, total)
 
     def _on_task_progress(self, task_id: str, downloaded: int, total: int) -> None:
         row = self.row_by_media_id.get(task_id)
