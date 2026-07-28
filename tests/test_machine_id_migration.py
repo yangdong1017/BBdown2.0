@@ -71,8 +71,9 @@ class MachineIdTests(unittest.TestCase):
     def test_without_a_machine_guid_there_is_nothing_to_migrate(self) -> None:
         with patch.object(machine_id_module, "_read_windows_machine_guid", return_value=""):
             candidates = machine_id_candidates()
+            legacy = get_legacy_machine_id()
 
-        self.assertEqual(candidates, [get_legacy_machine_id()])
+        self.assertEqual(candidates, [legacy])
 
 
 class LegacyDeviceReplacementTests(unittest.TestCase):

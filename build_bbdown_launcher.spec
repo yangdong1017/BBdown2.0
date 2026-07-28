@@ -56,7 +56,17 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["tkinter", "pytest", "unittest", "openai"],
+    # qfluentwidgets imports SciPy/Pillow for its image helpers, but this app
+    # does not use Matplotlib or its rendering-only dependencies.
+    excludes=[
+        "tkinter",
+        "pytest",
+        "unittest",
+        "openai",
+        "matplotlib",
+        "contourpy",
+        "kiwisolver",
+    ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
